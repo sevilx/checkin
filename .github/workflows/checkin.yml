@@ -1,0 +1,84 @@
+name: checkin
+
+on:
+  schedule:
+    # GitHub 的 cron 用 UTC：01:10 UTC = 09:10 北京时间
+    - cron: "10 1 * * *"
+  workflow_dispatch:
+    inputs:
+      site:
+        description: "只跑指定站点（逗号分隔，留空=全部），如 v2ex,nodeseek"
+        required: false
+        default: ""
+
+concurrency:
+  group: checkin
+  cancel-in-progress: false
+
+# 只读权限：这个工作流不需要写仓库，最小化 token 能力
+permissions:
+  contents: read
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: 安装 Python 依赖
+        run: pip install -r requirements.txt
+
+      - name: 安装 189 运行时依赖（按 lock 精确安装）
+        working-directory: runtime189
+        run: npm ci --no-audit --no-fund
+
+      - name: 执行签到
+        env:
+          TZ: Asia/Shanghai
+          # ---- 站点凭据（Settings → Secrets and variables → Actions）----
+          BAIDUWP_COOKIE: ${{ secrets.BAIDUWP_COOKIE }}
+          BILIBILI_COOKIE: ${{ secrets.BILIBILI_COOKIE }}
+          FNNASCLUB_COOKIE: ${{ secrets.FNNASCLUB_COOKIE }}
+          SMZDM_COOKIE: ${{ secrets.SMZDM_COOKIE }}
+          TIEBA_COOKIE: ${{ secrets.TIEBA_COOKIE }}
+          V2EX_COOKIE: ${{ secrets.V2EX_COOKIE }}
+          V2EX_A2: ${{ secrets.V2EX_A2 }}
+          NODESEEK_COOKIE: ${{ secrets.NODESEEK_COOKIE }}
+          NODESEEK_METHOD: ${{ secrets.NODESEEK_METHOD }}
+          LINUXDO_COOKIE: ${{ secrets.LINUXDO_COOKIE }}
+          TY189_USERNAME: ${{ secrets.TY189_USERNAME }}
+          TY189_PASSWORD: ${{ secrets.TY189_PASSWORD }}
+          # ---- 推送渠道（按需填，留空即跳过）----
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          TELEGRAM_API_HOST: ${{ secrets.TELEGRAM_API_HOST }}
+          SC3_PUSH_KEY: ${{ secrets.SC3_PUSH_KEY }}
+          PUSHPLUS_TOKEN: ${{ secrets.PUSHPLUS_TOKEN }}
+          WECOM_WEBHOOK: ${{ secrets.WECOM_WEBHOOK }}
+          FEISHU_WEBHOOK: ${{ secrets.FEISHU_WEBHOOK }}
+          BARK_URL: ${{ secrets.BARK_URL }}
+          GOTIFY_URL: ${{ secrets.GOTIFY_URL }}
+          GOTIFY_TOKEN: ${{ secrets.GOTIFY_TOKEN }}
+          NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
+          NTFY_URL: ${{ secrets.NTFY_URL }}
+          # ---- 行为开关 ----
+          ENABLED_SITES: ${{ vars.ENABLED_SITES || '' }}
+          FAIL_ON_ERROR: "false"
+          # 手动触发时可用 --site 只跑部分站点
+          RUN_SITE: ${{ github.event.inputs.site }}
+        run: |
+          if [ -n "$RUN_SITE" ]; then
+            python main.py --site "$RUN_SITE"
+          else
+            python main.py
+          fi
