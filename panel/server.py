@@ -28,6 +28,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
+from checkin import schedule as sched
 from checkin import settings as cfgstore
 from checkin import store
 from checkin.config import account_source, collect_accounts, load_file_config
@@ -212,27 +213,10 @@ def _record_failure(ip: str) -> None:
 # ---------------------------------------------------------------------- #
 # 触发签到
 # ---------------------------------------------------------------------- #
-def _acquire_lock() -> bool:
-    store.ensure_dir()
-    path = store.DATA_DIR / ".run.lock"
-    try:
-        if path.exists() and time.time() - path.stat().st_mtime > 1800:
-            path.unlink()
-        fd = os.open(str(path), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
-        os.write(fd, str(os.getpid()).encode())
-        os.close(fd)
-        return True
-    except FileExistsError:
-        return False
-    except OSError:
-        return False
-
-
-def _release_lock() -> None:
-    try:
-        (store.DATA_DIR / ".run.lock").unlink()
-    except OSError:
-        pass
+# 运行锁放在 store 里，和常驻调度器（checkin/scheduler.py）共用，
+# 避免"面板点了立即签到"和"定时到点"同时跑两轮。
+_acquire_lock = store.acquire_run_lock
+_release_lock = store.release_run_lock
 
 
 def trigger_run() -> tuple[bool, str]:
@@ -296,6 +280,22 @@ def _account_view(site_cls, account: dict, index: int) -> dict:
     }
 
 
+def schedule_payload() -> dict:
+    """给前端和 /api/status 用的时间表快照。"""
+    cfg = sched.load()
+    now = datetime.now()
+    nxt = sched.next_run(cfg, now) if cfg["enabled"] else None
+    return {
+        "enabled": cfg["enabled"],
+        "times": cfg["times"],
+        "source": cfg["source"],
+        "env_run_at": os.environ.get("RUN_AT", ""),
+        "next_run": nxt.isoformat(timespec="minutes") if nxt else None,
+        "now": now.isoformat(timespec="minutes"),
+        "timezone": time.strftime("%Z"),
+    }
+
+
 def build_settings_payload() -> dict:
     file_cfg = load_file_config()
     sites = []
@@ -332,6 +332,7 @@ def build_settings_payload() -> dict:
             "sites": site_proxies,
         },
         "password": {"source": password_source()},
+        "schedule": schedule_payload(),
     }
 
 
@@ -508,6 +509,7 @@ class Handler(BaseHTTPRequestHandler):
                 payload = store.load_status()
                 payload["running"] = bool(store.get_run_state())
                 payload["runs"] = store.load_runs()[:10]
+                payload["schedule"] = schedule_payload()
                 self._json(payload)
                 return
             if path == "/api/settings":
@@ -623,6 +625,33 @@ class Handler(BaseHTTPRequestHandler):
                     index = -1
                 status, message = check_account(key, index)
                 self._json({"status": status, "message": message})
+                return
+
+            if path == "/api/schedule":
+                if not ALLOW_EDIT:
+                    self._json({"ok": False, "message": "面板已禁用配置修改（PANEL_ALLOW_EDIT=false）"}, 403)
+                    return
+                enabled = bool(body.get("enabled"))
+                times, bad = sched.parse(body.get("times"))
+                if bad:
+                    self._json(
+                        {"ok": False, "message": f"这些时间点格式不对：{'、'.join(bad)}，请用 HH:MM，如 09:10"},
+                        400,
+                    )
+                    return
+                if enabled and not times:
+                    self._json({"ok": False, "message": "启用自动运行时至少要填一个时间点"}, 400)
+                    return
+                saved = sched.save(enabled, times)
+                if saved["enabled"] and not saved["times"]:
+                    self._json({"ok": False, "message": "时间点不能为空"}, 400)
+                    return
+                message = (
+                    f"已保存，每天 {'、'.join(saved['times'])} 自动签到（15 秒内生效，无需重启）"
+                    if saved["enabled"]
+                    else "已停用自动运行，只能手动点“立即签到”"
+                )
+                self._json({"ok": True, "message": message, "schedule": schedule_payload()})
                 return
 
             self._json({"error": "not found"}, 404)

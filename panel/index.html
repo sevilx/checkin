@@ -121,6 +121,7 @@
     <div class="stat"><div class="k">成功 / 总数</div><div class="v" id="statOk">–</div></div>
     <div class="stat"><div class="k">上次耗时</div><div class="v" id="statElapsed">–</div></div>
     <div class="stat"><div class="k">最近更新</div><div class="v" id="statTime" style="font-size:15px">–</div></div>
+    <div class="stat"><div class="k">下次运行</div><div class="v" id="statNext" style="font-size:15px">–</div></div>
     <div class="stat"><div class="k">需要处理</div><div class="v" id="statFailed" style="font-size:15px">–</div></div>
   </div>
 
@@ -185,6 +186,17 @@
 
     var failed = entries.filter(function (e) { return !e.ok; });
     $('statFailed').textContent = failed.length ? failed.map(function (e) { return e.site; }).join('、') : '无';
+
+    var cfg = data.schedule || {};
+    if (!cfg.enabled) {
+      $('statNext').textContent = '未启用';
+      $('statNext').title = '在「设置 → 定时运行」里开启';
+    } else if (cfg.next_run) {
+      $('statNext').textContent = cfg.next_run.replace('T', ' ');
+      $('statNext').title = '每天 ' + (cfg.times || []).join('、') + '（' + cfg.timezone + '）';
+    } else {
+      $('statNext').textContent = '–';
+    }
 
     $('cards').innerHTML = entries.map(renderCard).join('');
     $('empty').style.display = entries.length ? 'none' : 'block';

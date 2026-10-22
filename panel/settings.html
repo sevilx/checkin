@@ -112,6 +112,20 @@
   </div>
 
   <div class="card">
+    <div class="top"><span class="name">定时运行</span><span class="meta" id="schedMeta"></span></div>
+    <div class="body">
+      <label class="f"><span>启用</span>
+        <input type="checkbox" id="schedEnabled" style="flex:0 0 auto;margin-top:10px">
+      </label>
+      <label class="f"><span>时间点</span>
+        <input id="schedTimes" placeholder="09:10, 21:30" autocomplete="off" spellcheck="false">
+      </label>
+      <div class="row-actions"><button class="primary" id="schedSave" type="button">保存时间</button></div>
+      <p class="hint" id="schedHint"></p>
+    </div>
+  </div>
+
+  <div class="card">
     <div class="top"><span class="name">代理</span><span class="meta">留空 = 直连；支持 http / https / socks5 / socks5h</span></div>
     <div class="body">
       <label class="f"><span>全局代理</span><input id="proxyGlobal" placeholder="http://192.168.1.2:7890"></label>
@@ -245,6 +259,36 @@
     }).join('');
   }
 
+  // ---------------- 定时运行 ----------------
+  function prettyTime(iso) {
+    if (!iso) return '';
+    return iso.replace('T', ' ');
+  }
+
+  function renderSchedule(s) {
+    s = s || {};
+    var sourceMap = { panel: '面板设置', env: '来自 RUN_AT 环境变量', default: '默认值' };
+    var source = sourceMap[s.source] || s.source || '';
+    $('#schedEnabled').checked = !!s.enabled;
+    $('#schedTimes').value = (s.times || []).join(', ');
+    $('#schedMeta').textContent = s.enabled
+      ? '下次 ' + prettyTime(s.next_run) + ' · ' + source
+      : '已停用 · ' + source;
+    var lines = [];
+    if (s.enabled) {
+      lines.push('保存后 15 秒内生效，不用重启容器。容器时区 ' + (s.timezone || '') + '，现在是 ' + prettyTime(s.now) + '。');
+    } else {
+      lines.push('停用后不会自动签到，只能手动点“立即签到”。');
+    }
+    if (s.source === 'env') {
+      lines.push('当前用的是 .env / compose 里的 RUN_AT=' + (s.env_run_at || '') + '；在这里保存后以面板为准，RUN_AT 不再生效。');
+    }
+    if (s.source === 'default') {
+      lines.push('还没配置过，用的是默认每天 09:10。');
+    }
+    $('#schedHint').textContent = lines.join(' ');
+  }
+
   // ---------------- 加载 ----------------
   function apply(settings) {
     DATA = settings;
@@ -256,9 +300,10 @@
       ? '当前口令来自 .env。在这里改会覆盖它，下次启动仍然生效；想彻底改回 .env 的值，把 PANEL_PASSWORD 换成新的再重启。'
       : '忘记口令只能改 .env 的 PANEL_PASSWORD 或删掉 data/panel_auth.json 后重启。';
     renderProxies(settings.proxy || {});
+    renderSchedule(settings.schedule || {});
     renderSites(settings.sites || []);
     if (!settings.allow_edit) {
-      $$('#sites button, #sites input, #sites textarea, #pwSave, #proxySave, #pwCurrent, #pwNext, #pwNext2, #proxyGlobal, .psite')
+      $$('#sites button, #sites input, #sites textarea, #pwSave, #proxySave, #pwCurrent, #pwNext, #pwNext2, #proxyGlobal, .psite, #schedSave, #schedEnabled, #schedTimes')
         .forEach(function (el) { el.disabled = true; });
     }
   }
@@ -350,6 +395,20 @@
     if (event.target.id === 'proxyGlobal' || event.target.classList.contains('psite')) {
       event.target.setAttribute('data-dirty', '1');
     }
+  });
+
+  $('#schedSave').addEventListener('click', function () {
+    var btn = this;
+    var enabled = $('#schedEnabled').checked;
+    var times = $('#schedTimes').value;
+    btn.disabled = true;
+    api('/api/schedule', { enabled: enabled, times: times })
+      .then(function (data) {
+        toast(data.message || (data.ok ? '已保存' : '保存失败'));
+        if (data.ok && data.schedule) renderSchedule(data.schedule);
+      })
+      .catch(function () { toast('保存失败'); })
+      .finally(function () { btn.disabled = false; });
   });
 
   $('#pwSave').addEventListener('click', function () {
