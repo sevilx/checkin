@@ -81,3 +81,21 @@ class BaiduPan(Site):
         if level or value:
             lines.append(Line("会员", f"V{level or '?'}，成长值 {value or '?'}"))
         return lines
+
+
+    def verify(self) -> tuple[bool, str]:
+        """只读检测：/api/quota，errno=0 表示 cookie 有效。"""
+        session = self.session(headers=HEADERS)
+        resp = session.get(
+            f"{BASE}/api/quota", params={"checkfree": "1", "checkexpire": "1"}, timeout=20
+        )
+        data = resp.json()
+        errno = data.get("errno")
+        if errno == 0:
+            total = data.get("total")
+            size = f"，总容量 {total / 1024 ** 3:.1f} G" if isinstance(total, (int, float)) and total else ""
+            return True, f"Cookie 有效{size}"
+        if errno == -6:
+            return False, "Cookie 已失效（BDUSS 无效或已过期）"
+        detail = f"{data.get('error_msg') or ''}".strip()
+        return False, f"检测失败：errno={errno}{' ' + detail if detail else ''}"

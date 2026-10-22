@@ -77,3 +77,16 @@ class LinuxDo(Site):
             pass
 
         return lines
+
+
+    def verify(self) -> tuple[bool, str]:
+        """只读检测：Discourse 的 /session/current.json，返回 current_user 即有效。"""
+        session = self.session(headers={"Accept": "application/json", "Referer": f"{BASE}/"})
+        resp = session.get(f"{BASE}/session/current.json", timeout=20)
+        if resp.status_code == 200:
+            user = resp.json().get("current_user") or {}
+            if user.get("username"):
+                return True, f"Cookie 有效：{user['username']}（信任等级 {user.get('trust_level', '?')}）"
+        if resp.status_code in (403, 404):
+            return False, "Cookie 已失效（未登录）"
+        return False, f"检测失败：HTTP {resp.status_code}"

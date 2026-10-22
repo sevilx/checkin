@@ -99,3 +99,18 @@ class Bilibili(Site):
                 lines.append(Line("大会员权益", f"异常: {exc}"))
 
         return lines
+
+
+    def verify(self) -> tuple[bool, str]:
+        """只读检测：/x/web-interface/nav，code=0 表示登录态有效。"""
+        session = self.session(headers={"Referer": "https://www.bilibili.com/"})
+        data = session.get("https://api.bilibili.com/x/web-interface/nav", timeout=20).json()
+        code = data.get("code")
+        if code == 0:
+            info = data.get("data") or {}
+            name = info.get("uname") or "已登录"
+            tier = "大会员" if info.get("vipStatus") == 1 else "普通用户"
+            return True, f"Cookie 有效：{name}（{tier}）"
+        if code == -101:
+            return False, "Cookie 已失效（接口返回未登录）"
+        return False, f"检测失败：{data.get('message') or code}"

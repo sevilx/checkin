@@ -73,3 +73,19 @@ class V2ex(Site):
         if days:
             lines.append(Line("连续签到", f"{days.group(1)} 天"))
         return lines
+
+
+    def verify(self) -> tuple[bool, str]:
+        """只读检测：/api/v2/member/me，200 表示 A2 有效。"""
+        session = self.session(
+            headers={"Referer": "https://www.v2ex.com/", "Accept": "application/json"}
+        )
+        resp = session.get("https://www.v2ex.com/api/v2/member/me", timeout=20)
+        if resp.status_code == 200:
+            data = resp.json()
+            user = data.get("result") if isinstance(data.get("result"), dict) else data
+            name = (user or {}).get("username") or "已登录"
+            return True, f"Cookie 有效：{name}"
+        if resp.status_code in (401, 403):
+            return False, "Cookie 已失效（接口要求登录）"
+        return False, f"检测失败：HTTP {resp.status_code}"

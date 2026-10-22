@@ -158,3 +158,12 @@ class Tieba(Site):
             Line("签到失败", failed),
         ]
         return lines
+
+
+    def verify(self) -> tuple[bool, str]:
+        """只读检测：dc/common/tbs 的 is_login 字段。"""
+        session = self.session(headers={"Referer": "https://tieba.baidu.com/"})
+        data = session.get(TBS_URL, timeout=20).json()
+        if str(data.get("is_login")) == "1":
+            return True, "BDUSS 有效，已登录"
+        return False, "BDUSS 已失效（接口返回未登录）"
