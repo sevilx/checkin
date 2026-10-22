@@ -21,6 +21,8 @@ import os
 import re
 from pathlib import Path
 
+from . import settings
+
 ROOT = Path(__file__).resolve().parent.parent
 CONFIG_FILE = ROOT / "config.json"
 ENV_FILE = ROOT / ".env"
@@ -91,13 +93,18 @@ def _env_accounts(prefix: str, fields: tuple[str, ...]) -> list[dict]:
 
 
 def collect_accounts(site_cls, file_cfg: dict) -> list[dict]:
-    """收集某站点的账号。
+    """收集某站点的账号，优先级：面板设置 > 环境变量 > config.json。
 
     proxy 与 name（备注）对所有站点通用，不需要每个模块自己声明：
         V2EX_PROXY=http://...      V2EX_NAME=主号
         V2EX_COOKIE_2=...          V2EX_NAME_2=小号
     """
     fields = tuple(site_cls.fields) + ("proxy", "name")
+
+    panel_accounts = settings.site_accounts(site_cls.key)
+    if panel_accounts:
+        return panel_accounts
+
     env_accounts = _env_accounts(site_cls.key, fields)
     if env_accounts:
         return env_accounts
@@ -108,6 +115,19 @@ def collect_accounts(site_cls, file_cfg: dict) -> list[dict]:
     if isinstance(raw, list):
         return [item for item in raw if isinstance(item, dict)]
     return []
+
+
+def account_source(site_cls, file_cfg: dict | None = None) -> str:
+    """这个站点的账号是从哪来的：panel / env / file / none。给面板显示来源用。"""
+    if settings.site_accounts(site_cls.key):
+        return "panel"
+    fields = tuple(site_cls.fields) + ("proxy", "name")
+    if _env_accounts(site_cls.key, fields):
+        return "env"
+    cfg = load_file_config() if file_cfg is None else file_cfg
+    if cfg.get(site_cls.key):
+        return "file"
+    return "none"
 
 
 def enabled_sites(file_cfg: dict | None = None) -> list[str] | None:

@@ -18,6 +18,8 @@ from typing import Any, Iterable
 
 import requests
 
+from . import settings
+
 DEFAULT_UA = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
     "(KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36"
@@ -53,6 +55,10 @@ class AccountResult:
         return "\n".join(line.render() for line in self.lines) or "执行完成"
 
 
+class VerifyUnsupported(Exception):
+    """站点没有实现在线检测，面板显示"暂不支持"。"""
+
+
 class Site:
     """站点基类。子类需要覆盖 key / name 并实现 run()。"""
 
@@ -79,6 +85,14 @@ class Site:
     def run(self) -> list[Line]:
         raise NotImplementedError
 
+    def verify(self) -> tuple[bool, str]:
+        """只读地检查凭据是否还有效，不做任何有副作用的操作。
+
+        返回 (是否有效, 说明文字)。站点没实现就抛 VerifyUnsupported，
+        面板会显示"该站点暂不支持在线检测"，不会假装成功或失败。
+        """
+        raise VerifyUnsupported("该站点暂不支持在线检测，点“立即签到”看结果即可")
+
     # ------------------------------------------------------------------ #
     # 工具
     # ------------------------------------------------------------------ #
@@ -95,8 +109,14 @@ class Site:
         raw = self.cookie if cookie is None else cookie
         if raw:
             s.cookies = requests.utils.cookiejar_from_dict(parse_cookie(raw))
-        # 代理优先级：账号级 proxy > 站点级环境变量（由 config 收集进 account）> 全局 GLOBAL_PROXY
-        proxy = self.account.get("proxy") or os.environ.get("GLOBAL_PROXY") or ""
+        # 代理优先级：账号级 > 站点级（面板）> 全局（面板）> 环境变量 GLOBAL_PROXY
+        proxy = (
+            self.account.get("proxy")
+            or settings.site_proxy(self.key)
+            or settings.global_proxy()
+            or os.environ.get("GLOBAL_PROXY")
+            or ""
+        )
         if proxy:
             s.proxies.update({"http": str(proxy), "https": str(proxy)})
         return s
@@ -205,3 +225,23 @@ def friendly_error(exc: BaseException) -> str:
     if isinstance(exc, TimeoutError):
         return str(exc)
     return str(exc) or exc.__class__.__name__
+
+
+def verify_account(site_cls, account: dict, index: int = 0) -> tuple[str, str]:
+    """检测一个账号的凭据，返回 (状态, 说明)。
+
+    状态取值：ok / bad / unknown / unsupported。
+    网络类异常一律算 unknown —— 不能因为本机连不上就告诉用户 cookie 失效了。
+    """
+    try:
+        site = site_cls(account, index)
+    except Exception as exc:  # noqa: BLE001
+        return "bad", f"配置不完整：{exc}"
+
+    try:
+        ok, message = site.verify()
+    except VerifyUnsupported as exc:
+        return "unsupported", str(exc)
+    except Exception as exc:  # noqa: BLE001
+        return "unknown", friendly_error(exc)
+    return ("ok" if ok else "bad"), message
