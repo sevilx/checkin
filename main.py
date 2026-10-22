@@ -120,11 +120,16 @@ def write_step_summary(results: list[AccountResult]) -> None:
 def list_sites() -> None:
     print("支持的站点：\n")
     for site in SITES:
-        fields = " / ".join(f"{site.key}_{f.upper()}" for f in tuple(site.fields) + ("proxy",))
+        names: list[str] = []
+        for field in tuple(site.fields) + ("proxy", "name"):
+            if field not in names:
+                names.append(field)
+        fields = " / ".join(f"{site.key}_{f.upper()}" for f in names)
         print(f"  {site.key:<10} {site.name:<14} {fields}")
         if site.doc:
             print(f"  {'':<10} {site.doc}")
-    print("\n多账号写法：V2EX_COOKIE_1 / V2EX_COOKIE_2 …；或在 config.json 里放数组。")
+    print("\n多账号写法：字段名后加 _2 / _3，如 V2EX_COOKIE_2；或在 config.json 里放数组。")
+    print("备注写法：V2EX_NAME=主号 / V2EX_NAME_2=小号")
     print("代理写法：V2EX_PROXY=http://192.168.1.2:7890，或全局 GLOBAL_PROXY=...（189 除外，见 README）")
 
 

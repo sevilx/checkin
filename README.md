@@ -189,7 +189,46 @@ Cookie 相当于账号密码，**别发给任何人、别贴到 issue 里**。�
 
 **A. 环境变量**（推荐，也是 Actions 唯一的方式）
 
-写在 `.env` 里，或者配成 GitHub Secrets。变量名见上面的表格，`.env.example` 里有全量清单。
+变量名 = 站点 KEY + 字段名，`.env.example` 里有全量清单。一个填满的 `.env` 长这样：
+
+```bash
+# 单账号
+BAIDUWP_COOKIE="BAIDUID=xxx; BDUSS=yyy; STOKEN=zzz"
+BILIBILI_COOKIE="SESSDATA=xxx; bili_jct=yyy"
+FNNASCLUB_COOKIE="pvRK_2132_auth=xxx"
+SMZDM_COOKIE="sess=xxx; __ckguid=yyy"
+TIEBA_COOKIE="BDUSS=xxx; STOKEN=yyy"
+V2EX_COOKIE="A2=xxx; V2EX_LANG=zhcn"
+NODESEEK_COOKIE="session=xxx; pjwt=yyy"
+NODESEEK_METHOD=fixed
+LINUXDO_COOKIE="_t=xxx; _forum_session=yyy"
+TY189_USERNAME=13800000000
+TY189_PASSWORD=你的密码
+```
+
+多个账号、备注、单个账号走代理，后缀统一用 `_2`、`_3`：
+
+```bash
+V2EX_COOKIE_2="A2=xxx"
+V2EX_NAME_2=小号
+V2EX_PROXY_2=http://192.168.1.2:7890
+
+TY189_USERNAME_2=13900000000
+TY189_PASSWORD_2=你的密码
+TY189_NAME_2=备用号
+```
+
+规则：
+
+- 不带后缀 = 第一个账号；`_1` 和"不带后缀"是同一个账号，别混着写
+- `_NAME` 是备注，会显示在通知和面板上；不写的话天翼账号显示 `138***0000`，其他站点不显示
+- `_PROXY` 只影响这一个账号，见[代理](#代理)
+- 值里含空格、`;`、`#`、`$` 时用**引号整段包住**（双引号单引号都行，解析时会去掉外层引号）；纯字母数字可以不加
+- 注释单独占一行，**不要写在值的后面**：`V2EX_COOKIE=A2=xxx # 主号` 里的 `# 主号` 会被当成 cookie 的一部分
+
+在 **GitHub Secrets** 里反过来：只填值，**不要写 `BAIDUWP_COOKIE=` 前缀，也不要加引号**，整段 cookie 直接粘进去。仓库的 `Settings → Secrets → New repository secret` 里，Name 填 `BAIDUWP_COOKIE`，Secret 填 `BAIDUID=xxx; BDUSS=yyy; STOKEN=zzz`。
+
+> ⚠️ 只填 `BAIDUID` 不算登录。百度网盘必须带 `BDUSS`（部分接口还要 `STOKEN`），否则会报"签到返回无法解析，Cookie 可能已失效"。其他站点同理，看[支持的站点](#支持的站点)表里"凭据"那一列括号中的字段名，一个都不能少。
 
 **B. `config.json`**（适合账号多、想一次批量管理）
 
@@ -210,6 +249,43 @@ cp config.example.json config.json
 - 数组里每一项都能加 `"proxy": "http://192.168.1.2:7890"`
 - 环境变量优先于 `config.json`；两者都配了，用环境变量的
 - `config.json` 已被 `.gitignore` 忽略，Docker 部署时在 `docker-compose.yml` 里取消那行注释即可挂载进容器
+
+#### 两种写法怎么互换
+
+| `config.json` | 环境变量 |
+| --- | --- |
+| `"V2EX": [{ "cookie": "A2=xxx", "name": "主号" }]` | `V2EX_COOKIE="A2=xxx"` + `V2EX_NAME=主号` |
+| 同一站点数组里的第二项 | 所有字段加 `_2`：`V2EX_COOKIE_2`、`V2EX_NAME_2` |
+| `"TY189": [{ "username": "...", "password": "..." }]` | `TY189_USERNAME=...` + `TY189_PASSWORD=...` |
+| `"NODESEEK": [{ "cookie": "...", "method": "fixed" }]` | `NODESEEK_COOKIE=...` + `NODESEEK_METHOD=fixed` |
+| `"proxy": "http://192.168.1.2:7890"` | `V2EX_PROXY=http://192.168.1.2:7890` |
+| `"name": "主号"` | `V2EX_NAME=主号` |
+
+举一组完全等价的例子。B（`config.json`）：
+
+```json
+{
+  "V2EX": [{ "cookie": "A2=xxx", "name": "主号" }],
+  "TY189": [{ "username": "13800000000", "password": "xxx", "name": "小号" }],
+  "NODESEEK": [{ "cookie": "session=xxx", "method": "fixed" }]
+}
+```
+
+A（`.env` 或 Secrets）：
+
+```bash
+V2EX_COOKIE="A2=xxx"
+V2EX_NAME=主号
+
+TY189_USERNAME=13800000000
+TY189_PASSWORD=xxx
+TY189_NAME=小号
+
+NODESEEK_COOKIE="session=xxx"
+NODESEEK_METHOD=fixed
+```
+
+> 记住一个对应关系就行：**json 里的 KEY 变大写当前缀，字段名变大写接在后面**，多账号在后缀后加序号。
 
 ---
 
