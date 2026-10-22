@@ -1,0 +1,28 @@
+services:
+  checkin:
+    build: .
+    image: checkin:latest
+    container_name: checkin
+    restart: unless-stopped
+    ports:
+      # 冒号左边是 NAS 上的访问端口；只在局域网用就别往公网映射
+      - "8181:8080"
+    environment:
+      - TZ=Asia/Shanghai
+      # ---- 调度 ----
+      - RUN_AT=09:10            # 留空则单次执行后退出
+      - RUN_ON_START=false
+      # ---- 网页面板 ----
+      - PANEL_ENABLED=true
+      - PANEL_TITLE=我的签到
+      - PANEL_PORT=8080
+      - PANEL_ALLOW_RUN=true    # 是否允许在网页上点“立即签到”
+      # 面板口令：建议写在同目录 .env 里（PANEL_PASSWORD=xxx），留空则首次启动随机生成并打印到 docker logs
+      - PANEL_PASSWORD=${PANEL_PASSWORD:-}
+    env_file:
+      - .env
+    volumes:
+      # 面板状态 / 历史 / 口令都在这，别删
+      - ./data:/app/data
+    # 想用 config.json 管账号（格式与 dailycheckin-plus 一致）就放开下面这行
+    # - ./config.json:/app/config.json:ro

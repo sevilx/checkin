@@ -1,0 +1,35 @@
+{
+  "_说明": "本地 / NAS 用。KEY 与 dailycheckin-plus 的 config/config.json 完全一致，可直接整份复制。填了真实凭据就别提交到 git（.gitignore 已忽略）。",
+  "_代理": "任一账号都可以加 \"proxy\"，只对该账号生效；不填则用环境变量 GLOBAL_PROXY",
+  "BAIDUWP": [],
+  "BILIBILI": [],
+  "FNNASCLUB": [],
+  "SMZDM": [],
+  "TIEBA": [],
+  "V2EX": [
+    {
+      "cookie": "",
+      "name": "主号",
+      "proxy": "http://192.168.1.2:7890"
+    }
+  ],
+  "NODESEEK": [
+    {
+      "cookie": "",
+      "method": "random"
+    }
+  ],
+  "TY189": [
+    {
+      "username": "",
+      "password": ""
+    }
+  ],
+  "LINUXDO": [
+    {
+      "cookie": "",
+      "browse": 3,
+      "proxy": "http://192.168.1.2:7890"
+    }
+  ]
+}

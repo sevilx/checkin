@@ -1,0 +1,13 @@
+{
+  "name": "checkin189-runtime",
+  "version": "1.0.0",
+  "private": true,
+  "description": "天翼云盘签到运行时（cloud189-sdk 封装），由 checkin 的 Python 主控调用",
+  "main": "index.js",
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "cloud189-sdk": "^1.0.9"
+  }
+}
