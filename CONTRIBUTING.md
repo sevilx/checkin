@@ -8,17 +8,19 @@
 checkin/
 ├─ main.py                  # 入口：读配置 → 跑站点 → 汇总 → 写状态 → 推送
 ├─ checkin/
-│  ├─ core.py               # Site 基类、cookie 解析、重试、日志脱敏
-│  ├─ config.py             # 环境变量 / config.json 两套配置源
+│  ├─ core.py               # Site 基类、cookie 解析、重试、日志脱敏、verify_account
+│  ├─ config.py             # 环境变量 / config.json / 面板设置 三套来源
+│  ├─ settings.py           # data/settings.json（面板里保存的账号与代理）
 │  ├─ notify.py             # 8 个推送渠道
 │  ├─ store.py              # data/status.json、runs.json
 │  └─ sites/                # 一个站点一个文件
 ├─ panel/
-│  ├─ server.py             # 标准库 HTTP 服务 + 登录鉴权
+│  ├─ server.py             # 标准库 HTTP 服务 + 登录鉴权 + 设置接口
 │  ├─ index.html            # 状态页（不加载任何外部资源）
+│  ├─ settings.html         # 设置页：口令 / cookie / 代理 / 检测
 │  └─ login.html
 ├─ runtime189/              # 189 的 Node 桥接（cloud189-sdk）
-├─ .github/workflows/       # GitHub Actions 定时任务
+├─ .github/workflows/       # checkin.yml 定时签到、docker.yml 构建镜像到 GHCR
 ├─ Dockerfile               # Python + Node 双运行时
 └─ docker-compose.yml
 ```
@@ -68,7 +70,27 @@ class XxxSite(Site):
 - 结果用 `Line(标签, 值)` 返回，面板会直接渲染成两列表格，别自己拼字符串
 - 日志里不要出现 cookie / 密码原文，`core.py` 的 `redact()` 会兜底，但别依赖它
 - 请求要带间隔（1~2 秒）和重试，站点风控比速度重要
-- 代理、多账号、面板统计都是框架自动支持的，站点代码里不要处理
+- 代理、多账号、备注（`_NAME`）、面板统计都是框架自动支持的，站点代码里不要处理
+
+### 顺便支持"检测凭据"（可选）
+
+面板上每个账号有个「检测」按钮，调用的是站点的 `verify()`。想让自己加的站点也能检测，就实现它：
+
+```python
+    def verify(self) -> tuple[bool, str]:
+        """只读检查，绝不能顺手签到或产生任何写操作。"""
+        session = self.session(headers={"Referer": "https://example.com/"})
+        data = session.get("https://example.com/api/me", timeout=20).json()
+        if data.get("code") == 0:
+            return True, f"Cookie 有效：{data['data']['name']}"
+        return False, "Cookie 已失效（接口返回未登录）"
+```
+
+约定：
+
+- 返回 `(True, 说明)` 或 `(False, 说明)`；说明里**不要**出现 cookie 原文
+- 网络异常直接让它抛出去，框架会归类成"无法确认"，不会误报成失效
+- 没有稳定的只读接口就别实现 —— 默认实现会抛 `VerifyUnsupported`，面板显示"暂不支持"，比给假结论好
 
 ## 代码风格
 

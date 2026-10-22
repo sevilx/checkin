@@ -1,7 +1,12 @@
 services:
   checkin:
     build: .
+    # 用官方预构建镜像时，把上面的 build 换成下面这行（并注释掉 build）：
+    # image: ghcr.io/你的GitHub用户名/checkin:latest
     image: checkin:latest
+    # 只构建、不去仓库拉同名镜像。老版本 compose 不认这行就删掉，
+    # 忽略 “pull access denied for checkin” 那条提示即可（它只是先试拉一次，随后仍会构建）
+    pull_policy: build
     container_name: checkin
     restart: unless-stopped
     ports:
@@ -17,12 +22,13 @@ services:
       - PANEL_TITLE=我的签到
       - PANEL_PORT=8080
       - PANEL_ALLOW_RUN=true    # 是否允许在网页上点“立即签到”
+      - PANEL_ALLOW_EDIT=true   # 是否允许在网页上改口令 / 改 cookie / 改代理
       # 面板口令：建议写在同目录 .env 里（PANEL_PASSWORD=xxx），留空则首次启动随机生成并打印到 docker logs
       - PANEL_PASSWORD=${PANEL_PASSWORD:-}
     env_file:
       - .env
     volumes:
-      # 面板状态 / 历史 / 口令都在这，别删
+      # 面板状态 / 历史 / 口令 / 网页里保存的账号，都在这，别删
       - ./data:/app/data
     # 想用 config.json 管账号（格式与 dailycheckin-plus 一致）就放开下面这行
     # - ./config.json:/app/config.json:ro

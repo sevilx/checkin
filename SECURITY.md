@@ -12,19 +12,30 @@
 | 通知渠道 | 完整汇总文本 | 对应群 / 频道里的人 |
 | `data/status.json` | 最近一次结果 + 最近 30 次历史 | 本机 / 容器 + 面板登录用户 |
 | `data/panel_auth.json` | PBKDF2 派生值、随机盐、会话签名密钥（**没有明文口令**） | 同上，文件权限 0600 |
+| `data/settings.json` | **在网页「设置」里保存过的 cookie / 账号密码 / 代理（明文）** | 同上，文件权限 0600 |
+| `.env`（NAS 部署时） | 同上，明文 | 能读这个文件的人（建议 `chmod 600`） |
 
-不存的东西：cookie 明文不落盘、不写进 `status.json`、不进通知、不进 git。
+不存的东西：cookie / 密码不写进 `status.json`、不进通知、不进 git、不进镜像。
+
+> 如果你只在 `.env` 或 Secrets 里配凭据、从没在网页上改过，那 `data/settings.json` 不会存在，凭据不落盘。
+> 一旦在网页上保存过，它就是一份明文凭据 —— 和 `.env` 同等敏感，别放共享目录、别打包给别人。
 
 ## 面板的安全默认
 
-- 未登录访问 `/` 和 `/api/*` 一律 302 或 401，没有任何"游客可读"模式
+- 未登录访问 `/`、`/settings` 和 `/api/*` 一律 302 或 401，没有任何"游客可读"模式
 - 口令用 PBKDF2-HMAC-SHA256（12 万次迭代）+ 16 字节随机盐
 - 会话是 HMAC-SHA256 签名的过期时间戳，`HttpOnly; SameSite=Lax`，默认 7 天
+- 改口令会轮换签名密钥，所有旧会话立即失效；改完给当前浏览器发一张新票据，不用重新登录
 - 登录失败按 IP 限速（5 分钟内 6 次），超限返回 429
 - 页面不加载任何外部资源，CSP 为 `default-src 'self'`，附 `X-Frame-Options: DENY`
 - 会话 cookie 是 `HttpOnly; SameSite=Lax`；套了 HTTPS 反代就把 `PANEL_COOKIE_SECURE=true` 加上
-- `/api/run` 只接受 POST，配合 `SameSite=Lax`，跨站表单带不上会话，天然挡掉 CSRF
+- 所有写接口（`/api/run`、`/api/settings`、`/api/password`、`/api/check`）只接受 POST，
+  且校验 `Origin` 必须同源；配合 `SameSite=Lax`，跨站伪造请求会被 403
+- **浏览器永远拿不到凭据明文**：`/api/settings` 返回的密文字段是 `A2=a***5678` 这种掩码，
+  保存时留空代表"沿用原值"，明文只在服务端内存里拼接
+- 请求体上限 256 KB，超出直接丢弃，不做无界读取
 - 不记录访问日志（避免把 URL / 参数写进容器日志）
+- 不想开放网页改配置：`PANEL_ALLOW_EDIT=false`，设置页变只读，只保留状态查看
 - 默认只该在局域网用；要暴露到公网，必须前面套 HTTPS 反代（Caddy / Nginx / 群晖反代），不要裸奔
 
 ## 开源前的检查清单（已执行）
