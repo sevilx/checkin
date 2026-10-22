@@ -91,8 +91,13 @@ def _env_accounts(prefix: str, fields: tuple[str, ...]) -> list[dict]:
 
 
 def collect_accounts(site_cls, file_cfg: dict) -> list[dict]:
-    """收集某站点的账号。proxy 对所有站点通用，不需要每个模块自己声明。"""
-    fields = tuple(site_cls.fields) + ("proxy",)
+    """收集某站点的账号。
+
+    proxy 与 name（备注）对所有站点通用，不需要每个模块自己声明：
+        V2EX_PROXY=http://...      V2EX_NAME=主号
+        V2EX_COOKIE_2=...          V2EX_NAME_2=小号
+    """
+    fields = tuple(site_cls.fields) + ("proxy", "name")
     env_accounts = _env_accounts(site_cls.key, fields)
     if env_accounts:
         return env_accounts
