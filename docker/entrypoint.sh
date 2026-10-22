@@ -15,7 +15,10 @@ if [ -z "$RUN_AT" ]; then
 fi
 
 if [ "$PANEL_ENABLED" != "false" ]; then
-  echo "[entrypoint] 启动网页面板，端口 ${PANEL_PORT}"
+  echo "[entrypoint] 启动网页面板，容器内端口 ${PANEL_PORT}（宿主机端口看 compose 里的 ports）"
+  if [ -z "${PANEL_PASSWORD:-}" ]; then
+    echo "[entrypoint] 没设置 PANEL_PASSWORD：首次启动会生成随机口令，往下翻本页日志搜“面板口令”"
+  fi
   python3 -m panel.server &
   PANEL_PID=$!
   ( wait "$PANEL_PID"; echo "[entrypoint] 面板进程已退出（code=$?），签到调度继续运行" ) &
