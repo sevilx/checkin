@@ -38,6 +38,7 @@
   <form method="post" action="/login">
     <h1>{{TITLE}}</h1>
     <p class="tip">请输入面板口令。忘了就改环境变量 PANEL_PASSWORD 后重启容器。</p>
+    {{HINT}}
     {{ERROR}}
     <input type="password" name="password" placeholder="面板口令" autocomplete="current-password" autofocus required>
     <button type="submit">登录</button>

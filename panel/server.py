@@ -28,7 +28,11 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
+from checkin import settings as cfgstore
 from checkin import store
+from checkin.config import account_source, collect_accounts, load_file_config
+from checkin.core import Site, mask, verify_account
+from checkin.sites import BY_KEY, SITES
 
 ROOT = Path(__file__).resolve().parent.parent
 PANEL_DIR = Path(__file__).resolve().parent
@@ -38,11 +42,15 @@ PANEL_HOST = os.environ.get("PANEL_HOST", "0.0.0.0")
 PANEL_PORT = int(os.environ.get("PANEL_PORT", "8080"))
 PANEL_TITLE = os.environ.get("PANEL_TITLE", "checkin")
 ALLOW_RUN = os.environ.get("PANEL_ALLOW_RUN", "true").lower() != "false"
+ALLOW_EDIT = os.environ.get("PANEL_ALLOW_EDIT", "true").lower() != "false"
 SESSION_DAYS = int(os.environ.get("PANEL_SESSION_DAYS", "7"))
 # 套了 HTTPS 反代就打开它，会话 cookie 只走加密连接
 SECURE_COOKIE = os.environ.get("PANEL_COOKIE_SECURE", "").strip().lower() in ("1", "true", "yes", "on")
 ITERATIONS = 120_000
 COOKIE_NAME = "checkin_sid"
+# 这些字段只以打码形式回传到浏览器，保存时留空表示"不修改"
+SECRET_FIELDS = {"cookie", "a2", "password", "token"}
+MAX_BODY = 256 * 1024
 
 LOGIN_WINDOW = 300
 LOGIN_LIMIT = 6
@@ -79,44 +87,85 @@ def _save_auth(payload: dict) -> None:
     os.replace(tmp, AUTH_FILE)
 
 
+def _make_auth(password: str, source: str, extra: dict | None = None) -> dict:
+    salt = secrets.token_bytes(16)
+    auth = {
+        "salt": salt.hex(),
+        "hash": _hash(password, salt),
+        # 轮换签名密钥：改口令后所有旧会话立即失效
+        "secret": secrets.token_hex(32),
+        "source": source,
+    }
+    if extra:
+        auth.update(extra)
+    return auth
+
+
+def _env_fingerprint(password: str) -> str:
+    """记住 .env 里的 PANEL_PASSWORD 是哪一份，用来判断"环境变量有没有被改过"。"""
+    return hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), b"panel-env", ITERATIONS).hex()
+
+
 def init_auth() -> None:
-    """确定面板口令：优先用 PANEL_PASSWORD，没有就生成一个并打印到启动日志。"""
+    """确定面板口令。
+
+    * 有 PANEL_PASSWORD：以它为准，但网页上改过的口令不会被覆盖，
+      除非你改了 .env 里的 PANEL_PASSWORD（指纹变了才会重新同步）；
+    * 没有 PANEL_PASSWORD：沿用已保存的口令，没有就生成一个打印到启动日志。
+    """
     auth = _load_auth()
     env_password = os.environ.get("PANEL_PASSWORD", "").strip()
 
     if env_password:
-        if not auth or not hmac.compare_digest(_hash(env_password, bytes.fromhex(auth["salt"])), auth["hash"]):
-            salt = secrets.token_bytes(16)
-            auth = {
-                "salt": salt.hex(),
-                "hash": _hash(env_password, salt),
-                # 改口令同时轮换签名密钥，旧会话立即全部失效
-                "secret": secrets.token_hex(32),
-                "source": "env",
-            }
-            _save_auth(auth)
+        fingerprint = _env_fingerprint(env_password)
+        if not auth or auth.get("env_fp") != fingerprint:
+            _save_auth(_make_auth(env_password, "env", {"env_fp": fingerprint, "changed_via_panel": False}))
             print("[panel] 已按 PANEL_PASSWORD 更新面板口令，旧会话已失效")
+            return
+        if auth.get("changed_via_panel"):
+            print("[panel] 面板口令已在网页上修改过，保留面板设置（改 .env 的 PANEL_PASSWORD 会覆盖它）")
+            return
+        print("[panel] 使用 PANEL_PASSWORD 指定的口令")
         return
 
     if auth:
-        print("[panel] 使用已保存的面板口令（如需重置，设置 PANEL_PASSWORD 后重启）")
+        print("[panel] 使用已保存的面板口令（忘了就设置 PANEL_PASSWORD 后重启）")
         return
 
     generated = secrets.token_urlsafe(9)
-    salt = secrets.token_bytes(16)
-    _save_auth(
-        {
-            "salt": salt.hex(),
-            "hash": _hash(generated, salt),
-            "secret": secrets.token_hex(32),
-            "source": "generated",
-        }
-    )
+    _save_auth(_make_auth(generated, "generated", {"changed_via_panel": False}))
     print("\n" + "=" * 58)
     print("  面板首次启动，已生成随机口令（只显示这一次）：")
     print(f"      {generated}")
-    print("  想固定下来就设置环境变量 PANEL_PASSWORD=你的密码 后重启")
+    print("  想固定下来就设置环境变量 PANEL_PASSWORD=你的密码 后重启，")
+    print("  或者登录后在「设置」页里直接改。")
     print("=" * 58 + "\n")
+
+
+def password_source() -> str:
+    """返回口令来源：env（来自 .env） / panel（网页改过） / generated（随机生成） / 未知。"""
+    auth = _load_auth()
+    if auth.get("changed_via_panel"):
+        return "panel"
+    return str(auth.get("source") or "")
+
+
+def change_password(current: str, new: str) -> tuple[bool, str]:
+    if not verify_password(current):
+        return False, "当前口令不正确"
+    if len(new) < 8:
+        return False, "新口令至少 8 位"
+    if new == current:
+        return False, "新口令和当前口令一样"
+    old = _load_auth()
+    _save_auth(
+        _make_auth(
+            new,
+            "panel",
+            {"env_fp": old.get("env_fp", ""), "changed_via_panel": True},
+        )
+    )
+    return True, "口令已更新，其他设备上的登录已失效"
 
 
 def verify_password(password: str) -> bool:
@@ -224,6 +273,128 @@ def trigger_run() -> tuple[bool, str]:
 
 
 # ---------------------------------------------------------------------- #
+# 设置页：读 / 写 / 检测
+# ---------------------------------------------------------------------- #
+def _editable_fields(site_cls) -> list[str]:
+    """proxy / name 单独有输入框，不混在字段列表里重复展示。"""
+    return [f for f in site_cls.fields if f not in ("proxy", "name")]
+
+
+def _account_view(site_cls, account: dict, index: int) -> dict:
+    values: dict[str, str] = {}
+    has: dict[str, bool] = {}
+    for field in _editable_fields(site_cls):
+        value = str(account.get(field) or "")
+        has[field] = bool(value)
+        values[field] = mask(value) if (field in SECRET_FIELDS and value) else value
+    return {
+        "index": index,
+        "name": str(account.get("name") or account.get("remark") or ""),
+        "values": values,
+        "has": has,
+        "proxy": str(account.get("proxy") or ""),
+    }
+
+
+def build_settings_payload() -> dict:
+    file_cfg = load_file_config()
+    sites = []
+    for site_cls in SITES:
+        accounts = collect_accounts(site_cls, file_cfg)
+        sites.append(
+            {
+                "key": site_cls.key,
+                "name": site_cls.name,
+                "doc": site_cls.doc,
+                "fields": _editable_fields(site_cls),
+                "required": list(site_cls.required),
+                "secret_fields": [f for f in _editable_fields(site_cls) if f in SECRET_FIELDS],
+                "source": account_source(site_cls, file_cfg),
+                "supports_check": site_cls.verify is not Site.verify,
+                "accounts": [_account_view(site_cls, account, i) for i, account in enumerate(accounts)],
+            }
+        )
+
+    site_proxies = {}
+    for site_cls in SITES:
+        site_proxies[site_cls.key] = cfgstore.site_proxy(site_cls.key) or os.environ.get(
+            f"{site_cls.key}_PROXY", ""
+        )
+
+    return {
+        "title": PANEL_TITLE,
+        "allow_edit": ALLOW_EDIT,
+        "allow_run": ALLOW_RUN,
+        "sites": sites,
+        "proxy": {
+            "global": cfgstore.global_proxy(),
+            "global_env": os.environ.get("GLOBAL_PROXY", ""),
+            "sites": site_proxies,
+        },
+        "password": {"source": password_source()},
+    }
+
+
+def save_site_accounts(key: str, incoming: list) -> tuple[bool, str]:
+    site_cls = BY_KEY.get(str(key).lower())
+    if not site_cls:
+        return False, "未知站点"
+
+    current = collect_accounts(site_cls, load_file_config())
+    merged: list[dict] = []
+    for item in incoming or []:
+        if not isinstance(item, dict):
+            continue
+        origin = item.get("from")
+        base = current[origin] if isinstance(origin, int) and 0 <= origin < len(current) else {}
+        account: dict = {}
+
+        name = str(item.get("name") or "").strip()
+        if name:
+            account["name"] = name
+
+        snapshot = item.get("values") or {}
+        for field in _editable_fields(site_cls):
+            if field not in snapshot:
+                continue
+            raw = snapshot.get(field)
+            value = "" if raw is None else str(raw).strip()
+            if value:
+                account[field] = value
+            elif field in SECRET_FIELDS and base.get(field):
+                # 密文字段：前端拿到的是打码值，留空表示"保持原样"
+                account[field] = str(base[field])
+
+        proxy = str(item.get("proxy") or "").strip()
+        if proxy:
+            account["proxy"] = proxy
+
+        if not account:
+            continue
+        missing = [f for f in site_cls.required if not account.get(f)]
+        if missing:
+            return False, f"{site_cls.name} 缺少必填字段：{'、'.join(missing)}"
+        if site_cls.key == "V2EX" and not (account.get("cookie") or account.get("a2")):
+            return False, "V2EX 需要 cookie 或 a2 之一"
+        merged.append(account)
+
+    cfgstore.set_site(site_cls.key, merged)
+    if merged:
+        return True, f"{site_cls.name} 已保存 {len(merged)} 个账号"
+    return True, f"{site_cls.name} 已清空，改用 .env / config.json 的配置"
+
+
+def check_account(key: str, index) -> tuple[str, str]:
+    site_cls = BY_KEY.get(str(key).lower())
+    if not site_cls:
+        return "unknown", "未知站点"
+    accounts = collect_accounts(site_cls, load_file_config())
+    if not (0 <= index < len(accounts)):
+        return "unknown", "这个账号不存在，先保存配置再检测"
+    return verify_account(site_cls, accounts[index], index)
+
+
+# ---------------------------------------------------------------------- #
 # HTTP 处理
 # ---------------------------------------------------------------------- #
 class Handler(BaseHTTPRequestHandler):
@@ -278,6 +449,22 @@ class Handler(BaseHTTPRequestHandler):
     def log_message(self, fmt: str, *args) -> None:  # 不打请求日志，避免把路径/参数写进容器日志
         return
 
+    def _same_origin(self) -> bool:
+        """带 Origin 的请求必须是同源，挡住跨站伪造的 POST。"""
+        origin = self.headers.get("Origin", "")
+        if not origin:
+            return True
+        return urlparse(origin).netloc == self.headers.get("Host", "")
+
+    def _json_body(self, raw: bytes) -> dict:
+        if not raw:
+            return {}
+        try:
+            data = json.loads(raw.decode("utf-8"))
+        except (ValueError, UnicodeDecodeError):
+            return {}
+        return data if isinstance(data, dict) else {}
+
     # -- 路由 ------------------------------------------------------------ #
     def do_GET(self) -> None:  # noqa: N802
         path = urlparse(self.path).path
@@ -304,6 +491,15 @@ class Handler(BaseHTTPRequestHandler):
             self._html(self._page())
             return
 
+        if path == "/settings":
+            if not self._authed():
+                self.send_response(302)
+                self.send_header("Location", "/login")
+                self.end_headers()
+                return
+            self._html(self._render("settings.html"))
+            return
+
         if path.startswith("/api/"):
             if not self._authed():
                 self._json({"error": "unauthorized"}, 401)
@@ -314,6 +510,9 @@ class Handler(BaseHTTPRequestHandler):
                 payload["runs"] = store.load_runs()[:10]
                 self._json(payload)
                 return
+            if path == "/api/settings":
+                self._json(build_settings_payload())
+                return
             self._json({"error": "not found"}, 404)
             return
 
@@ -322,7 +521,7 @@ class Handler(BaseHTTPRequestHandler):
     def do_POST(self) -> None:  # noqa: N802
         path = urlparse(self.path).path
         length = int(self.headers.get("Content-Length") or 0)
-        raw = self.rfile.read(length) if 0 < length <= 8192 else b""
+        raw = self.rfile.read(length) if 0 < length <= MAX_BODY else b""
 
         if path == "/login":
             ip = self._client_ip()
@@ -358,6 +557,9 @@ class Handler(BaseHTTPRequestHandler):
             if not self._authed():
                 self._json({"error": "unauthorized"}, 401)
                 return
+            if not self._same_origin():
+                self._json({"error": "forbidden"}, 403)
+                return
             if not ALLOW_RUN:
                 self._json({"error": "面板已禁用“立即签到”"}, 403)
                 return
@@ -365,16 +567,92 @@ class Handler(BaseHTTPRequestHandler):
             self._json({"ok": ok, "message": message}, 200 if ok else 409)
             return
 
+        if path.startswith("/api/"):
+            if not self._authed():
+                self._json({"error": "unauthorized"}, 401)
+                return
+            if not self._same_origin():
+                self._json({"error": "forbidden"}, 403)
+                return
+            body = self._json_body(raw)
+
+            if path == "/api/settings":
+                if not ALLOW_EDIT:
+                    self._json({"ok": False, "message": "面板已禁用配置修改（PANEL_ALLOW_EDIT=false）"}, 403)
+                    return
+                sites = body.get("sites")
+                if isinstance(sites, dict):
+                    for key, accounts in sites.items():
+                        if not isinstance(accounts, list):
+                            continue
+                        ok, message = save_site_accounts(key, accounts)
+                        if not ok:
+                            self._json({"ok": False, "message": message}, 400)
+                            return
+                proxies = body.get("proxy")
+                if isinstance(proxies, dict):
+                    global_value = proxies.get("global")
+                    site_values = proxies.get("sites")
+                    cfgstore.set_proxies(
+                        None if global_value is None else str(global_value),
+                        site_values if isinstance(site_values, dict) else None,
+                    )
+                self._json({"ok": True, "message": "已保存，下次签到生效", "settings": build_settings_payload()})
+                return
+
+            if path == "/api/password":
+                if not ALLOW_EDIT:
+                    self._json({"ok": False, "message": "面板已禁用配置修改（PANEL_ALLOW_EDIT=false）"}, 403)
+                    return
+                ok, message = change_password(str(body.get("current") or ""), str(body.get("next") or ""))
+                if not ok:
+                    self._json({"ok": False, "message": message}, 400)
+                    return
+                cookie = (
+                    f"{COOKIE_NAME}={issue_token()}; Path=/; HttpOnly; SameSite=Lax; Max-Age={SESSION_DAYS * 86400}"
+                    + ("; Secure" if SECURE_COOKIE else "")
+                )
+                self._json({"ok": True, "message": message, "source": password_source()}, 200, {"Set-Cookie": cookie})
+                return
+
+            if path == "/api/check":
+                key = str(body.get("site") or "")
+                try:
+                    index = int(body.get("index"))
+                except (TypeError, ValueError):
+                    index = -1
+                status, message = check_account(key, index)
+                self._json({"status": status, "message": message})
+                return
+
+            self._json({"error": "not found"}, 404)
+            return
+
         self._json({"error": "not found"}, 404)
 
     # -- 页面 ------------------------------------------------------------ #
+    def _render(self, name: str) -> str:
+        return (PANEL_DIR / name).read_text(encoding="utf-8").replace("{{TITLE}}", PANEL_TITLE)
+
     def _page(self) -> str:
-        return (PANEL_DIR / "index.html").read_text(encoding="utf-8").replace("{{TITLE}}", PANEL_TITLE)
+        return self._render("index.html")
 
     def _login_page(self, error: str = "") -> str:
         template = (PANEL_DIR / "login.html").read_text(encoding="utf-8")
         notice = f"<p class='error'>{error}</p>" if error else ""
-        return template.replace("{{TITLE}}", PANEL_TITLE).replace("{{ERROR}}", notice)
+        hint = ""
+        if password_source() == "generated":
+            hint = (
+                "<p class='error' style='color:var(--muted)'>"
+                "首次启动的随机口令只打印在容器日志里："
+                "<code>docker logs checkin | grep 面板口令</code>"
+                "</p>"
+            )
+        return (
+            template.replace("{{TITLE}}", PANEL_TITLE)
+            .replace("{{HINT}}", hint)
+            .replace("{{ERROR}}", notice)
+        )
 
 
 def main() -> None:
