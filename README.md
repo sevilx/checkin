@@ -15,20 +15,23 @@
 | --- | --- | --- |
 | 百度网盘 | Cookie（`BDUSS`、`STOKEN`） | 会员成长值签到 + 每日答题 |
 | 哔哩哔哩 | Cookie（`SESSDATA`、`bili_jct`） | 直播签到 + 漫画签到 + 大会员权益 |
-| 飞牛 NAS 论坛 | Cookie（`pvRK_2132_auth`） | Discuz 每日打卡 |
+| 飞牛 NAS 论坛 | Cookie（`pvRK_2132_auth`） | Discuz 每日打卡（站点偶尔 503，会自动重试 3 次） |
 | 什么值得买 | Cookie（`sess`） | APP 接口签到 + 奖励明细 |
 | 百度贴吧 | Cookie（`BDUSS`） | 按关注列表逐吧签到 |
-| V2EX | Cookie 或 `A2` | `/mission/daily` 领每日登录奖励 |
-| NodeSeek | Cookie（`session`） | 随机 / 固定鸡腿 |
+| V2EX | Cookie 或 `A2` | `/mission/daily` 领每日登录奖励（已领过算成功，不报错） |
+| NodeSeek | Cookie（`session`，建议带 `cf_clearance`） | 随机 / 固定鸡腿（Cloudflare 站点，见 FAQ） |
 | 天翼云盘 189 | 手机号 + 密码 | 个人空间签到 + 容量变化 |
-| LinuxDo | Cookie | 登录保活 + 浏览任务（该站本身没有签到按钮） |
+| LinuxDo | Cookie（含 `_t`、`_forum_session`） | 登录保活 + 浏览任务（该站本身没有签到按钮） |
+
+> NodeSeek、LinuxDo、V2EX 都挂在 Cloudflare 后面，**机房 IP 或频繁换 IP 的代理容易被拦成 403**。
+> 遇到 403 时程序会把「被拦截」和「cookie 失效」分开提示，不会让你白白重配 cookie；处理办法见 [FAQ](#faq)。
 
 同时具备：
 
 - **多账号**：同一个站点可以配无限个账号，结果分开显示
 - **站点级代理**：每个站点可以走不同的代理，也可以设全局兜底
 - **推送通知**：Telegram、企业微信、飞书、Server酱³、PushPlus、Bark、Gotify、ntfy，填哪个用哪个
-- **网页面板**（Docker 模式）：看最近一次结果、最近 30 次历史、一键触发；还能在网页上改口令、改 cookie、改代理、检测 cookie 是否有效
+- **网页面板**（Docker 模式）：看最近一次结果、最近 30 次历史、一键触发；还能在网页上改口令、**改定时时间**、改 cookie、改代理、检测 cookie 是否有效
 - **日志脱敏**：cookie 和密码在输出里统一变成 `abcd***wxyz`
 - **单站点隔离**：某个站点挂了不影响其他站点，也不会中断整轮
 - **两种跑法共用一套配置**：环境变量、`config.json`、网页里填的，KEY 完全一致
@@ -120,15 +123,65 @@ on:
 
 **A. 用 GitHub 构建好的镜像（推荐，NAS 上不用编译）**
 
-仓库自带 `.github/workflows/docker.yml`：往 `main` 推一次代码，GitHub 就会把镜像构建好推到 `ghcr.io/<你的用户名>/checkin:latest`（同时出 amd64 和 arm64），构建记录在 **Actions → docker**。
+仓库自带 `.github/workflows/docker.yml`：往 `main` 推一次代码（或在 Actions 里手动运行 `docker`），GitHub 就会把镜像构建好推到 `ghcr.io/<你的用户名>/checkin:latest`，同时出 amd64 和 arm64。
 
-在 NAS 上把 `docker-compose.yml` 里这两行改掉：
+**构建完先确认两件事，顺序别搞反：**
+
+**① Actions 里有没有 `docker` 这个 workflow，并且是绿色的**
+
+打开 `https://github.com/<你的用户名>/checkin/actions`，左侧列表应该有 **两个** workflow：
+
+| workflow | 作用 |
+| --- | --- |
+| `checkin` | 每天跑签到 |
+| `docker` | 构建镜像并推到 GHCR |
+
+- 只看到 `checkin` → `.github/workflows/docker.yml` 没传上去（见下面的"补文件"）
+- 有 `docker` 但显示红叉 → 点进去看哪一步失败。如果失败在 **Push** 那步、日志里有 `permission_denied` 或 `Resource not accessible by integration`，去 **Settings → Actions → General → Workflow permissions** 选 **Read and write permissions** 保存，再回 Actions 点 **Re-run jobs**
+
+**② 包列表在个人主页的 Packages 标签，不在 Settings 里**
+
+```
+https://github.com/<你的用户名>?tab=packages
+```
+
+或者直接打开这个包：
+
+```
+https://github.com/users/<你的用户名>/packages/container/checkin
+```
+
+> ⚠️ **头像 → Settings → 左侧 `Packages` 是"默认包设置"（Default Package Setting）**，只用来给以后新建的包定默认策略，**那里永远看不到包列表**。这是最容易走错的一步。
+
+包名是**全小写**的：用户名 `BenZhang` 对应 `ghcr.io/benzhang/checkin`。
+
+**改成公开**：打开包页 → 右侧 **Package settings** → 拉到底部 **Danger Zone** → **Change visibility** → 选 Public → 按提示输入包名确认。
+
+如果根本找不到 **Change visibility** 这一项，说明这个包已经继承了仓库的可见性（GitHub 对公开仓库默认 `Inherit access from source repository`），不用改，直接在 NAS 上 pull 就行。
+
+**补文件**（Actions 里没有 `docker` 时）：仓库首页 → **Add file → Create new file** → 文件名框输入
+
+```
+.github/workflows/docker.yml
+```
+
+把本地 `checkin-hub/.github/workflows/docker.yml` 的内容整段粘进去提交。提交后会自动触发一次构建。
+
+**仍然 pull 不下来**，两种兜底：
+
+- 在 NAS 上 `docker login ghcr.io`（用户名 + 一个带 `read:packages` 的 PAT），私有包也能拉
+- 不用 GHCR，改走下面的 **B**（打包成 tar 拷过去）
+
+在 NAS 上，`docker-compose.yml` 里把 **A 组注释掉、放开 B 组**：
 
 ```yaml
 services:
   checkin:
-    # build: .                          # 注释掉
-    # pull_policy: build                # 注释掉
+    # ---- A. 本地构建 ----
+    # build: .
+    # image: checkin:latest
+
+    # ---- B. 用 GitHub 构建好的镜像 ----
     image: ghcr.io/<你的用户名>/checkin:latest
 ```
 
@@ -136,9 +189,10 @@ services:
 docker compose pull && docker compose up -d
 ```
 
-> 第一次构建完成后，要去 **头像 → Your packages → checkin → Package settings → Change visibility → Public** 把包改成公开，
-> 否则 NAS 上 `docker compose pull` 会报 `denied` —— 仓库是公开的，但 GHCR 的包**默认私有**。
-> 不想公开包也行，就在 NAS 上先 `docker login ghcr.io`（用户名 + 一个带 `read:packages` 的 PAT）再 pull。
+⚠️ **切换时必须把两件事一起做**，少做一件就会报 `No such image`：
+
+1. 注释掉 `build: .`（否则 compose 认为你要本地构建）
+2. **不要保留 `pull_policy: build`** —— 这个字段的含义是"强制本地构建、绝不拉取"，A 组没注释干净时它会让 `up` 直接跳过 pull，然后因为本地没有该镜像而报 `Error response from daemon: No such image`
 
 **B. 在别的机器上构建好，打包成文件拷过去（离线、跨机器）**
 
@@ -170,7 +224,7 @@ docker compose up -d --build
 
 首次大约 2~5 分钟，时间基本花在用 apt 装 `python3`（Debian 源慢的时候会到 1 分钟以上）。
 
-> 只构建不拉取的情况下，日志里可能出现 `pull access denied for checkin` 的提示，那是 compose 先试着去 Docker Hub 找同名镜像，失败后才构建，**不影响结果**。新版 compose 已经被 `pull_policy: build` 消掉了；老版本不认这个字段，删掉这行忽略提示即可。
+> 日志里可能出现 `pull access denied for checkin`，那是 compose 先试着去 Docker Hub 找同名镜像、失败后才本地构建，**不影响结果**，忽略即可。
 
 #### 第二步：第一次打开面板（口令在哪）
 
@@ -206,19 +260,27 @@ docker compose logs checkin | grep -A3 面板口令
 
 | 变量 | 默认 | 作用 |
 | --- | --- | --- |
-| `RUN_AT` | `09:10` | 每天几点跑（容器时区） |
+| `RUN_AT` | `09:10` | 每天几点跑（容器时区），可写多个：`09:10,21:30` |
 | `RUN_ON_START` | `false` | 启动后先跑一次 |
 | `PANEL_ENABLED` | `true` | 是否起网页面板 |
 | `PANEL_ALLOW_RUN` | `true` | 是否允许网页上点"立即签到" |
-| `PANEL_ALLOW_EDIT` | `true` | 是否允许网页上改口令 / cookie / 代理 |
+| `PANEL_ALLOW_EDIT` | `true` | 是否允许网页上改口令 / cookie / 代理 / 定时 |
 | `PANEL_PASSWORD` | 空 | 面板口令，建议写在 `.env` 里 |
 | `PANEL_COOKIE_SECURE` | `false` | 套了 HTTPS 反代后设为 `true` |
 
-**不想用容器内置定时**（比如 NAS 自带的任务计划更可靠）：把 `RUN_AT` 留空，容器只跑一次就退出，由外部调度：
+**改时间不用重启容器**：面板右上角「设置」→「定时运行」，勾选启用、填 `09:10, 21:30` 这种格式保存，**15 秒内生效**。
+
+时间表来源的优先级是 **面板设置 > `RUN_AT` > 默认 `09:10`**：只要在网页上保存过一次，`RUN_AT` 就不再影响它（否则改完一重启又被打回原值）。设置页会显示当前时间表来自哪里、下一次什么时候跑。
+
+> 想省电只在工作日跑？本项目没有做「按星期」，直接把时间点设成 `09:10`，周末在网页上点一下「停用」即可，不用改配置。
+
+**完全不想用容器内置定时**（比如 NAS 自带的任务计划更可靠）：把 `RUN_AT` 留空，容器只跑一次就退出，由外部调度：
 
 ```bash
 docker compose run --rm -e RUN_AT= checkin
 ```
+
+注意这条和工作日停用是两回事：`RUN_AT=` 是"单次模式"，面板里配的时间表也不会生效；面板里点「停用」是"常驻但不定时"，容器还在、面板还能用。
 
 **数据都在 `./data`**：
 
@@ -228,7 +290,8 @@ docker compose run --rm -e RUN_AT= checkin
 | `runs.json` | 最近 30 次历史 |
 | `last-run.log` | 最近一次运行的完整日志 |
 | `panel_auth.json` | 面板口令的 PBKDF2 派生值 + 会话密钥 |
-| `settings.json` | **在网页「设置」里保存的账号、cookie、代理**（权限 600） |
+| `settings.json` | **在网页「设置」里保存的账号、cookie、代理、定时时间**（权限 600） |
+| `schedule_state.json` | 今天已经跑过哪几个时间点，防止容器重启后重复跑 |
 
 备份这个目录就是完整快照，删掉等于清空历史、账号和口令。
 
@@ -430,7 +493,7 @@ GLOBAL_PROXY=http://192.168.1.2:7890
 
 ### 状态页（`/`）
 
-每个账号一张卡，绿 / 红状态条，下面列明细；顶部是"成功 / 总数、上次耗时、最近更新、需要处理"，下面是历史表格。每 30 秒自动刷新，任务在跑时顶部有提示条，右上角可以点"立即签到"。
+每个账号一张卡，绿 / 红状态条，下面列明细；顶部是"成功 / 总数、上次耗时、最近更新、**下次运行**、需要处理"，下面是历史表格。每 30 秒自动刷新，任务在跑时顶部有提示条，右上角可以点"立即签到"。
 
 想先看长什么样：浏览器打开 [`docs/preview.html`](docs/preview.html)，静态假数据，不用起服务。
 
@@ -441,6 +504,7 @@ GLOBAL_PROXY=http://192.168.1.2:7890
 | 功能 | 说明 |
 | --- | --- |
 | **改面板口令** | 输当前口令 + 新口令，立即生效；重启后仍然有效（除非你改了 `.env` 里的 `PANEL_PASSWORD`，那样以 `.env` 为准） |
+| **改定时时间** | 「定时运行」卡片：勾选启用、填 `09:10, 21:30`（逗号分隔，不限个数），保存后 15 秒内生效，**不用重启容器**；也能一键停用，只保留手动「立即签到」 |
 | **改 cookie / 账号密码** | 每个站点一张卡，字段和 `.env` 里的变量一一对应；密文字段回显成 `A2=a***5678`，输入框留空＝不修改，安全性上浏览器永远拿不到明文 |
 | **多加/删除账号** | 点「添加账号」，备注、凭据、单账号代理各填一份；删除后点保存才生效 |
 | **改代理** | 全局代理 + 每个站点单独代理，就近生效；账号级代理在账号里填 |
@@ -525,10 +589,30 @@ GLOBAL_PROXY=http://192.168.1.2:7890
 保存即生效，下一次「立即签到」或定时任务就用新的。如果卡片上显示"环境变量"，说明你还没保存成功，或者保存后该站点被面板接管了 —— 看徽章文案判断。
 
 **日志里出现 `pull access denied for checkin`？**
-compose 先试着去 Docker Hub 拉同名镜像，失败后才用本地构建，不影响结果。新版 compose 已被 `pull_policy: build` 消掉；老版本删掉那行忽略即可。
+compose 先试着去 Docker Hub 拉同名镜像，失败后才用本地构建，不影响结果，忽略即可。
+
+**换了预构建镜像，`up` 报 `No such image: ghcr.io/xxx/checkin:latest`？**
+镜像没拉下来，`up` 就直接去创建容器了。按顺序查：
+
+1. `docker-compose.yml` 里是否还留着 `pull_policy: build` —— 这个字段表示"只构建、不拉取"，必须删掉（本项目当前版本已不再使用它）
+2. `build: .` 是否已注释掉
+3. 手动拉一次看真实报错：`docker pull ghcr.io/<你的用户名>/checkin:latest`。报 `denied` 说明包是私有的，回 GitHub 包设置改成 Public，或者 `docker login ghcr.io`
+4. 拉成功后再 `docker compose up -d`
 
 **换成预构建镜像后怎么更新？**
 `docker compose pull && docker compose up -d`。`./data` 不要删，配置和历史都在里面。
+
+**NodeSeek / LinuxDo 报 403？**
+这两个站都在 Cloudflare 后面，403 有九成不是 cookie 的问题，而是**出口 IP 被判定成风险流量**：
+
+1. 用浏览器打开站点，过一次人机验证，然后把 `cf_clearance` 一起复制进 cookie（NodeSeek 尤其需要）
+2. 代理要用**固定出口 IP** —— 每次换 IP 都会让 `cf_clearance` 失效
+3. 机房 IP 比家宽更容易被拦；家宽 / NAS 直连的成功率明显更高
+
+程序会区分「拦截页」和「接口拒绝」：如果提示里出现 Cloudflare、HTTP 403，先怀疑网络出口；如果提示「cookie 不完整 / 未取到当前用户」，才去重新复制 cookie。
+
+**V2EX 显示"今日已领取"是失败吗？**
+不是，那是成功。V2EX 的签到就是 `/mission/daily` 页上的「领取铜币」，当天领过之后页面只剩一句「每日登录奖励已领取」。旧版本会把这种状态当成失败，现在算成功。
 
 **LinuxDo 为什么没有"签到成功"？**
 linux.do 是 Discourse 论坛，本身没有签到功能。社区脚本做的都是登录保活 + 浏览主题，本项目同样只做这两件事。

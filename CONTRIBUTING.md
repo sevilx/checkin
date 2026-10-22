@@ -10,14 +10,16 @@ checkin/
 ├─ checkin/
 │  ├─ core.py               # Site 基类、cookie 解析、重试、日志脱敏、verify_account
 │  ├─ config.py             # 环境变量 / config.json / 面板设置 三套来源
-│  ├─ settings.py           # data/settings.json（面板里保存的账号与代理）
+│  ├─ settings.py           # data/settings.json（面板里保存的账号、代理、定时）
+│  ├─ schedule.py           # 时间表：解析 / 保存 / 算下一次运行
+│  ├─ scheduler.py          # 常驻调度器（python -m checkin.scheduler）
 │  ├─ notify.py             # 8 个推送渠道
-│  ├─ store.py              # data/status.json、runs.json
+│  ├─ store.py              # data/status.json、runs.json、运行锁
 │  └─ sites/                # 一个站点一个文件
 ├─ panel/
-│  ├─ server.py             # 标准库 HTTP 服务 + 登录鉴权 + 设置接口
+│  ├─ server.py             # 标准库 HTTP 服务 + 登录鉴权 + 设置/定时接口
 │  ├─ index.html            # 状态页（不加载任何外部资源）
-│  ├─ settings.html         # 设置页：口令 / cookie / 代理 / 检测
+│  ├─ settings.html         # 设置页：口令 / 定时 / cookie / 代理 / 检测
 │  └─ login.html
 ├─ runtime189/              # 189 的 Node 桥接（cloud189-sdk）
 ├─ .github/workflows/       # checkin.yml 定时签到、docker.yml 构建镜像到 GHCR

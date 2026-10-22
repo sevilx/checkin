@@ -1,12 +1,21 @@
 services:
   checkin:
+    # ============================================================
+    # 镜像来源：A、B 二选一
+    #   切换时把另一组整组注释掉，两组的 image 不能同时留着
+    #   不要加 pull_policy 字段，它会覆盖默认行为（见 README 常见问题）
+    # ============================================================
+
+    # ---- A. 本地构建（默认）----
+    #   启动：docker compose up -d --build
     build: .
-    # 用官方预构建镜像时，把上面的 build 换成下面这行（并注释掉 build）：
-    # image: ghcr.io/你的GitHub用户名/checkin:latest
     image: checkin:latest
-    # 只构建、不去仓库拉同名镜像。老版本 compose 不认这行就删掉，
-    # 忽略 “pull access denied for checkin” 那条提示即可（它只是先试拉一次，随后仍会构建）
-    pull_policy: build
+
+    # ---- B. 用 GitHub Actions 构建好的镜像（NAS 上不用编译）----
+    #   切换步骤：把上面 A 的 build 和 image 两行注释掉，放开下面一行，然后
+    #       docker compose pull && docker compose up -d
+    # image: ghcr.io/<你的用户名>/checkin:latest
+
     container_name: checkin
     restart: unless-stopped
     ports:
@@ -15,7 +24,10 @@ services:
     environment:
       - TZ=Asia/Shanghai
       # ---- 调度 ----
-      - RUN_AT=09:10            # 留空则单次执行后退出
+      # 每天几点跑，可写多个：09:10 或 09:10,21:30
+      # 面板「设置 → 定时运行」里保存过就以面板为准（改完 15 秒生效，不用重启）
+      # 写成 RUN_AT= （空值）＝ 单次模式：跑一次就退出，交给外部 cron
+      - RUN_AT=09:10
       - RUN_ON_START=false
       # ---- 网页面板 ----
       - PANEL_ENABLED=true

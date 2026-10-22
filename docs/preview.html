@@ -121,6 +121,7 @@
     <div class="stat"><div class="k">成功 / 总数</div><div class="v" id="statOk">–</div></div>
     <div class="stat"><div class="k">上次耗时</div><div class="v" id="statElapsed">–</div></div>
     <div class="stat"><div class="k">最近更新</div><div class="v" id="statTime" style="font-size:15px">–</div></div>
+    <div class="stat"><div class="k">下次运行</div><div class="v" id="statNext" style="font-size:15px">–</div></div>
     <div class="stat"><div class="k">需要处理</div><div class="v" id="statFailed" style="font-size:15px">–</div></div>
   </div>
 
@@ -139,8 +140,9 @@
 <div class="toast" id="toast"></div>
 
 <script>
-var DEMO = {"updated_at": "2026-10-22T09:10:11", "ok": 3, "total": 4, "elapsed": 12.4, "entries": [{"site": "百度网盘", "label": "", "ok": true, "lines": [{"name": "签到", "value": "+10 成长值"}, {"name": "答题", "value": "+5 成长值"}, {"name": "会员", "value": "V3，成长值 1288"}], "error": "", "elapsed": 3.2}, {"site": "NodeSeek", "label": "tester", "ok": true, "lines": [{"name": "账号", "value": "tester"}, {"name": "签到方式", "value": "随机鸡腿"}, {"name": "签到", "value": "+5 鸡腿，当前 260 鸡腿"}], "error": "", "elapsed": 1.1}, {"site": "天翼云盘 189", "label": "138***0000", "ok": true, "lines": [{"name": "个人签到", "value": "获得 128M 空间"}, {"name": "个人容量", "value": "+128.00M / 共 1024.00G"}], "error": "", "elapsed": 6.4}, {"site": "V2EX 论坛", "label": "", "ok": false, "lines": [], "error": "Cookie 已失效（被重定向到登录页）", "elapsed": 0.9}], "running": false, "runs": [{"at": "2026-10-22T09:10:11", "ok": 3, "total": 4, "elapsed": 12.4, "failed": ["V2EX 论坛"]}]};
+var DEMO = {"updated_at": "2026-10-22T11:41:16", "ok": 4, "total": 9, "elapsed": 28.8, "running": false, "schedule": {"enabled": true, "times": ["09:10", "21:30"], "source": "panel", "env_run_at": "", "next_run": "2026-10-22T21:30", "now": "2026-10-22T11:41", "timezone": "Asia/Shanghai"}, "entries": [{"site": "百度网盘", "label": "", "ok": true, "elapsed": 2.1, "error": "", "lines": [{"name": "签到", "value": "+5 成长值"}, {"name": "会员", "value": "V1，成长值 10"}]}, {"site": "哔哩哔哩", "label": "", "ok": true, "elapsed": 1.4, "error": "", "lines": [{"name": "账号", "value": "sevilx"}, {"name": "等级", "value": "Lv6"}, {"name": "硬币", "value": "1011.5"}]}, {"site": "飞牛 NAS 论坛", "label": "", "ok": false, "elapsed": 6.2, "error": "飞牛论坛返回 HTTP 503（已重试 3 次）—— 站点维护或被限流，过几小时再试", "lines": []}, {"site": "什么值得买", "label": "", "ok": true, "elapsed": 1.8, "error": "", "lines": [{"name": "签到", "value": "签到成功，+08 分"}, {"name": "经验", "value": "+2"}, {"name": "连续签到", "value": "已连续签到 5 天"}]}, {"site": "百度贴吧", "label": "", "ok": true, "elapsed": 9.3, "error": "", "lines": [{"name": "已签到", "value": "6"}, {"name": "未签到", "value": "0"}]}, {"site": "V2EX 论坛", "label": "", "ok": true, "elapsed": 2.6, "error": "", "lines": [{"name": "账号", "value": "sevilx"}, {"name": "今日签到", "value": "已领取每日登录奖励"}, {"name": "连续登录", "value": "128 天"}]}, {"site": "NodeSeek", "label": "", "ok": false, "elapsed": 1.1, "error": "被 Cloudflare 拦截（HTTP 403），请求没到 NodeSeek 服务器。三个办法：1) 浏览器打开 nodeseek.com 完成一次验证，然后把 cf_clearance 一并复制进 Cookie；2) 代理要固定出口 IP；3) 用家宽出口", "lines": []}, {"site": "天翼云盘 189", "label": "138***0000", "ok": false, "elapsed": 5.4, "error": "登录未通过：[Can not get 'sessionId']，可能需要先在官方页面完成一次图形验证码登录", "lines": []}, {"site": "LinuxDo 论坛", "label": "", "ok": false, "elapsed": 1.2, "error": "被 Cloudflare 拦截（HTTP 403）：请求没到 linux.do。换一个代理出口（机房 IP 容易被拦）", "lines": []}], "runs": [{"at": "2026-10-22T11:41:16", "ok": 4, "total": 9, "elapsed": 28.8, "failed": ["飞牛 NAS 论坛", "NodeSeek", "天翼云盘 189", "LinuxDo 论坛"]}, {"at": "2026-10-21T21:30:04", "ok": 7, "total": 9, "elapsed": 26.1, "failed": ["飞牛 NAS 论坛", "NodeSeek"]}, {"at": "2026-10-21T09:10:02", "ok": 7, "total": 9, "elapsed": 25.4, "failed": ["飞牛 NAS 论坛", "NodeSeek"]}]};
 window.fetch = function () { return Promise.resolve({ status: 200, json: function () { return Promise.resolve(DEMO); } }); };
+setTimeout(function () { clearTimeout(window.__t); }, 0);
 </script>
 <script>
 (function () {
@@ -189,6 +191,17 @@ window.fetch = function () { return Promise.resolve({ status: 200, json: functio
 
     var failed = entries.filter(function (e) { return !e.ok; });
     $('statFailed').textContent = failed.length ? failed.map(function (e) { return e.site; }).join('、') : '无';
+
+    var cfg = data.schedule || {};
+    if (!cfg.enabled) {
+      $('statNext').textContent = '未启用';
+      $('statNext').title = '在「设置 → 定时运行」里开启';
+    } else if (cfg.next_run) {
+      $('statNext').textContent = cfg.next_run.replace('T', ' ');
+      $('statNext').title = '每天 ' + (cfg.times || []).join('、') + '（' + cfg.timezone + '）';
+    } else {
+      $('statNext').textContent = '–';
+    }
 
     $('cards').innerHTML = entries.map(renderCard).join('');
     $('empty').style.display = entries.length ? 'none' : 'block';
