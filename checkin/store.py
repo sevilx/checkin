@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import os
+import time
 from datetime import datetime
 from pathlib import Path
 
@@ -16,8 +17,10 @@ DATA_DIR = Path(os.environ.get("CHECKIN_DATA_DIR") or (ROOT / "data"))
 STATUS_FILE = DATA_DIR / "status.json"
 RUNS_FILE = DATA_DIR / "runs.json"
 STATE_FILE = DATA_DIR / "run_state.json"
+LOCK_FILE = DATA_DIR / ".run.lock"
 
 MAX_RUNS = 30
+LOCK_STALE = 1800          # 锁超过 30 分钟视为上次异常退出留下的
 
 
 def ensure_dir() -> None:
@@ -106,5 +109,28 @@ def get_run_state() -> dict:
 def clear_run_state() -> None:
     try:
         STATE_FILE.unlink()
+    except OSError:
+        pass
+
+
+# ---------------------------------------------------------------------- #
+# 运行锁：面板的「立即签到」和定时调度共用，避免同时跑两轮
+# ---------------------------------------------------------------------- #
+def acquire_run_lock() -> bool:
+    ensure_dir()
+    try:
+        if LOCK_FILE.exists() and time.time() - LOCK_FILE.stat().st_mtime > LOCK_STALE:
+            LOCK_FILE.unlink()
+        fd = os.open(str(LOCK_FILE), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+        os.write(fd, str(os.getpid()).encode())
+        os.close(fd)
+        return True
+    except (FileExistsError, OSError):
+        return False
+
+
+def release_run_lock() -> None:
+    try:
+        LOCK_FILE.unlink()
     except OSError:
         pass

@@ -27,6 +27,53 @@ DEFAULT_UA = (
 
 TIMEOUT = 20
 
+# 真实浏览器会带的一组请求头。Cloudflare 之类的风控会看这些字段，
+# 只发 User-Agent 的裸请求很容易被判定成脚本，直接 403。
+_CH_UA = '"Chromium";v="141", "Google Chrome";v="141", "Not?A_Brand";v="24"'
+
+NAV_HEADERS = {
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+    "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
+    "Sec-CH-UA": _CH_UA,
+    "Sec-CH-UA-Mobile": "?0",
+    "Sec-CH-UA-Platform": '"Windows"',
+    "Sec-Fetch-Dest": "document",
+    "Sec-Fetch-Mode": "navigate",
+    "Sec-Fetch-Site": "none",
+    "Sec-Fetch-User": "?1",
+    "Upgrade-Insecure-Requests": "1",
+}
+
+XHR_HEADERS = {
+    "Accept": "application/json, text/plain, */*",
+    "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
+    "Sec-CH-UA": _CH_UA,
+    "Sec-CH-UA-Mobile": "?0",
+    "Sec-CH-UA-Platform": '"Windows"',
+    "Sec-Fetch-Dest": "empty",
+    "Sec-Fetch-Mode": "cors",
+    "Sec-Fetch-Site": "same-origin",
+}
+
+# Cloudflare / WAF 拦截页的特征串
+_BLOCK_MARKERS = (
+    "just a moment",
+    "attention required",
+    "cf-error-details",
+    "cf_chl_opt",
+    "cloudflare",
+    "enable javascript and cookies",
+    "access denied",
+)
+
+
+def looks_blocked(status: int, text: str) -> bool:
+    """判断这次响应是不是被 WAF / Cloudflare 拦了，而不是站点真的出错。"""
+    if status not in (403, 429, 503):
+        return False
+    body = (text or "")[:4000].lower()
+    return any(marker in body for marker in _BLOCK_MARKERS)
+
 
 @dataclass
 class Line:
