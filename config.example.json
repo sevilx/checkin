@@ -1,6 +1,8 @@
 {
   "_说明": "本地 / NAS 用。KEY 与 dailycheckin-plus 的 config/config.json 完全一致，可直接整份复制。填了真实凭据就别提交到 git（.gitignore 已忽略）。",
-  "_代理": "任一账号都可以加 \"proxy\"，只对该账号生效；不填则用环境变量 GLOBAL_PROXY",
+  "_proxy_说明": "任一账号都可以加 \"proxy\"，只对该账号生效；不填则用环境变量 GLOBAL_PROXY",
+  "_189_说明": "TY189 填 username + password 即可；账号密码登录被设备校验挡住时，可以只填 sson（浏览器 F12 → Application → Cookies 里的 SSON 值）",
+  "_nodeseek_说明": "cf_clearance 和 IP 绑定，抄进来也没用，程序会自动丢掉；确实要用就加 \"keep_cf\": true 并把 \"ua\" 写成浏览器的 UA",
   "BAIDUWP": [],
   "BILIBILI": [],
   "FNNASCLUB": [],
@@ -22,7 +24,8 @@
   "TY189": [
     {
       "username": "",
-      "password": ""
+      "password": "",
+      "sson": ""
     }
   ],
   "LINUXDO": [

@@ -19,12 +19,13 @@
 | 什么值得买 | Cookie（`sess`） | APP 接口签到 + 奖励明细 |
 | 百度贴吧 | Cookie（`BDUSS`） | 按关注列表逐吧签到 |
 | V2EX | Cookie 或 `A2` | `/mission/daily` 领每日登录奖励（已领过算成功，不报错） |
-| NodeSeek | Cookie（`session`，建议带 `cf_clearance`） | 随机 / 固定鸡腿（Cloudflare 站点，见 FAQ） |
-| 天翼云盘 189 | 手机号 + 密码 | 个人空间签到 + 容量变化 |
-| LinuxDo | Cookie（含 `_t`、`_forum_session`） | 登录保活 + 浏览任务（该站本身没有签到按钮） |
+| NodeSeek | Cookie（`session`） | 随机 / 固定鸡腿（Cloudflare 站点，自动换浏览器指纹） |
+| 天翼云盘 189 | 手机号 + 密码，或 `SSON` | 个人空间签到 + 容量变化（登录成功后会话缓存 6 天） |
+| LinuxDo | Cookie（含 `_t`） | 登录保活 + 浏览任务（该站本身没有签到按钮） |
 
 > NodeSeek、LinuxDo、V2EX 都挂在 Cloudflare 后面，**机房 IP 或频繁换 IP 的代理容易被拦成 403**。
-> 遇到 403 时程序会把「被拦截」和「cookie 失效」分开提示，不会让你白白重配 cookie；处理办法见 [FAQ](#faq)。
+> 程序会用 `curl_cffi` 模仿真实浏览器的 TLS 指纹、并在被拦时自动换几种指纹重试，
+> 同时把「被拦截」和「cookie 失效」分开提示，不会让你白白重配 cookie。处理办法见 [FAQ](#faq)。
 
 同时具备：
 
@@ -330,9 +331,13 @@ python -m panel.server               # 起面板，默认 http://127.0.0.1:8080
 ### Cookie 通用取法
 
 1. 浏览器登录目标站点（**建议用无痕窗口或专门的浏览器**，避免和日常使用混在一起）
-2. 按 `F12` → **Application（应用）** → 左侧 **Cookies** → 选中该站点的域名
-3. `Ctrl+A` 全选 → `Ctrl+C` 复制，粘贴成 `key=value; key2=value2` 的形式
+2. 按 `F12` → **Network（网络）** → 刷新页面 → 点任意一个请求 → 右侧 **Request Headers** 里的 `Cookie` —— 把整行值复制下来
+3. 粘贴成 `key=value; key2=value2` 的形式
 4. 有些站点（B 站、什么值得买）必须整段复制，少一个关键字段就会失败
+
+> 为什么推荐从「网络 → 请求标头」复制，而不是「Application → Cookies」或控制台 `document.cookie`？
+> 因为 Discourse（LinuxDo）的 `_t`、NodeSeek 的 `session` 这类登录令牌都是 **HttpOnly**，JS 读不到；
+> 从请求头复制能保证一个不漏。
 
 也可以用插件（如 Cookie-Editor）一键导出，格式选 `Header String` 或 `Netscape` 里的 header 形式。
 
@@ -570,8 +575,15 @@ GLOBAL_PROXY=http://192.168.1.2:7890
 **Cookie 又失效了？**
 这类工具的通病，日志会写"Cookie 已失效（被重定向到登录页）"，重新复制一次即可。NodeSeek 建议连 `pjwt` 一起复制，能显示用户名。
 
-**189 报"设备ID不存在"或要二次验证？**
-云盘在陌生 IP（GitHub 服务器、容器新出口）登录会触发设备校验。先在手机或网页端登录一次并信任该设备，或临时关闭设备锁再跑。
+**189 报"Can not get session."？**
+这句话不是 189 说的，是 SDK 的兜底报错：它把「缓存 / 刷新 / SSO / 账号密码」四种登录全试了一遍，全失败才抛这一句，每次失败的真实原因被它记日志、没往外抛。所以先看日志里的 `SDK 日志：` 尾巴，再按概率排查：
+
+1. **设备校验**（最常见）：去 cloud.189.cn 网页版 → 账号安全，关掉「登录保护 / 设备锁」，或者先用手机 App 登录一次，把当前设备设成常用设备
+2. **图形验证码**：浏览器手动登录一次，隔 10 分钟再跑；当天失败次数太多就先停一天
+3. **密码被 .env 截断**：密码里有 `#`、`$`、空格时要用引号整段包住
+4. **出口 IP 变了**：NAS / 机房 IP 会要求二次验证，换回常用网络
+
+登录成功一次之后，会话会缓存到 `data/token189/`，有效期 6 天 —— 之后不再反复登录，触发风控的概率低很多。如果账号密码这条路过不去，可以只填 `TY189_SSON`（浏览器登录后 F12 → Application → Cookies → `SSON` 的值）走 SSO 通道。
 
 **贴吧很慢？**
 关注列表要分页拉，每吧间隔 1~2 秒防风控，几十个吧跑 2~3 分钟正常，工作流的 40 分钟超时够用。
@@ -603,13 +615,23 @@ compose 先试着去 Docker Hub 拉同名镜像，失败后才用本地构建，
 `docker compose pull && docker compose up -d`。`./data` 不要删，配置和历史都在里面。
 
 **NodeSeek / LinuxDo 报 403？**
-这两个站都在 Cloudflare 后面，403 有九成不是 cookie 的问题，而是**出口 IP 被判定成风险流量**：
 
-1. 用浏览器打开站点，过一次人机验证，然后把 `cf_clearance` 一起复制进 cookie（NodeSeek 尤其需要）
-2. 代理要用**固定出口 IP** —— 每次换 IP 都会让 `cf_clearance` 失效
-3. 机房 IP 比家宽更容易被拦；家宽 / NAS 直连的成功率明显更高
+先在提示里分清是哪一种，这两种的处理方式完全相反：
 
-程序会区分「拦截页」和「接口拒绝」：如果提示里出现 Cloudflare、HTTP 403，先怀疑网络出口；如果提示「cookie 不完整 / 未取到当前用户」，才去重新复制 cookie。
+**一、`Just a moment...` / 提示里说"请求没到站点"** —— 这是 Cloudflare 的挑战页，跟 cookie 没关系，请求在边缘节点就被挡了：
+
+1. **根本原因是请求指纹**。`requests` 的 TLS 握手（JA3）和 HTTP/2 指纹太"像脚本"，Cloudflare 一眼就能认出来。本项目用 `curl_cffi` 复刻 Safari / Chrome 的指纹，被拦时还会自动换几种指纹重试。Docker 镜像和 Actions 都已预装；自己搭环境就 `pip install curl_cffi`（不装也能跑，只是这些站点更容易 403）
+2. **出口 IP 决定一切**。机房 IP、云服务器、部分机场节点会被直接挑战；家宽 / NAS 直连成功率明显更高。可以给单个站点配代理，走和浏览器同一个出口
+3. **不要抄 `cf_clearance`**。它绑定「签发时的 IP + User-Agent」，你从电脑浏览器复制、拿到 NAS 上发出去必然对不上，反而更像"拿着别人票据的请求"。程序默认会把它连同 `__cf_bm`、`_cfuvid` 一起丢掉。确实要保留就配 `keep_cf=true`，并把 `ua` 写成当初那个浏览器的 UA，三者必须一致
+
+**二、站点回话了但拒绝登录（401 / 403，提示说"cookie 不被承认"）** —— 这才是 cookie 的问题：
+
+- **NodeSeek**：cookie 里必须有 `session`。它和 `pjwt` 都是 HttpOnly，`document.cookie` 拿不到，要从 F12 → 网络 → 请求标头 → `Cookie` 整行复制
+- **LinuxDo**：cookie 里必须有 `_t`（Discourse 的登录令牌，同样是 HttpOnly）。**这是"我在电脑上明明登录着、程序却说失效"最常见的原因** —— 从控制台 `document.cookie` 复制出来的 cookie 里根本没有 `_t`。正确姿势：F12 → 网络 → 点任意一个请求 → 请求标头 → 把 `Cookie` 整行复制
+- 改过密码、在别处点过"退出所有设备"，`_t` 都会立即失效，重新登录一次就好
+
+**为什么我在电脑上能登录，NAS 上就不行？**
+cookie 本身是对的，但出口 IP 和 TLS 指纹跟浏览器不一样。Cloudflare 校验的是"这三样是不是同一个客户端"，所以换机器 = 换客户端。要么让 NAS 走和浏览器同一个代理出口，要么指望指纹+IP 别太脏。
 
 **V2EX 显示"今日已领取"是失败吗？**
 不是，那是成功。V2EX 的签到就是 `/mission/daily` 页上的「领取铜币」，当天领过之后页面只剩一句「每日登录奖励已领取」。旧版本会把这种状态当成失败，现在算成功。
@@ -630,6 +652,7 @@ linux.do 是 Discourse 论坛，本身没有签到功能。社区脚本做的都
 - [BeacherZ/dailycheckin-plus](https://github.com/BeacherZ/dailycheckin-plus) — MIT
 - [Chankin026/linuxdo-v2ex-checkin](https://github.com/Chankin026/linuxdo-v2ex-checkin)
 - [wes-lin/Cloud189Checkin](https://github.com/wes-lin/Cloud189Checkin) — ISC，运行时依赖 `cloud189-sdk`
+- [donma033x/nodeseek-checkin](https://github.com/donma033x/nodeseek-checkin)、[luck7x/nodeseek-hybrid-signin](https://github.com/luck7x/nodeseek-hybrid-signin) — 用 `curl_cffi` 换指纹过 Cloudflare 的思路来自这两个项目
 
 想加站点或改代码，见 [CONTRIBUTING.md](CONTRIBUTING.md)。
 

@@ -1,8 +1,10 @@
 """NodeSeek：POST /api/attendance 领取鸡腿。
 
-注意两个坑：
+三个坑：
 1. 今天已签到时接口返回 HTTP 500，但 body 仍是 JSON，所以只能看 success 字段；
-2. cf_clearance 不是必需的，只带 session 就能签。
+2. NodeSeek 挂在 Cloudflare 后面，requests 的 TLS 握手会被直接挑战 ——
+   所以要模仿真实浏览器的指纹（curl_cffi），并换几个指纹重试；
+3. 浏览器里带出来的 cf_clearance 和 IP + UA 绑定，换机器就失效，默认丢掉。
 """
 
 from __future__ import annotations
@@ -10,7 +12,7 @@ from __future__ import annotations
 import base64
 import json
 
-from ..core import Line, Site, XHR_HEADERS, looks_blocked, parse_cookie
+from ..core import Line, Site, XHR_HEADERS, parse_cookie
 
 BASE = "https://www.nodeseek.com"
 ATTENDANCE_URL = f"{BASE}/api/attendance"
@@ -21,7 +23,8 @@ class NodeSeek(Site):
     key = "NODESEEK"
     name = "NodeSeek"
     fields = ("cookie", "method")
-    doc = "登录 nodeseek.com → F12 → Cookie（至少含 session）；method 可选 random / fixed"
+    doc = "登录 nodeseek.com → F12 → Cookie（至少含 session，不要只抄 cf_clearance）；method 可选 random / fixed"
+    cf_impersonates = ("safari15_5", "chrome120", "chrome110")
 
     def __init__(self, account: dict, index: int = 0):
         super().__init__(account, index)
@@ -29,7 +32,6 @@ class NodeSeek(Site):
         if "session" not in cookies:
             raise ValueError("Cookie 中未找到 session，请重新登录后复制")
         self.username = self._decode_name(cookies.get("pjwt", ""))
-        self.has_clearance = bool(cookies.get("cf_clearance"))
         raw = str(self.account.get("method") or "random").strip().lower()
         self.method = "fixed" if raw in ("fixed", "fixed5", "5", "constant") else "random"
 
@@ -46,20 +48,17 @@ class NodeSeek(Site):
         return str((data or {}).get("name") or "")
 
     def run(self) -> list[Line]:
-        session = self.session(
-            headers={
-                **XHR_HEADERS,
-                "Referer": f"{BASE}/",
-                "Origin": BASE,
-            }
+        cookie_str, kept_cf = self.cf_cookies()
+        headers = self.cf_headers(
+            {**XHR_HEADERS, "Referer": f"{BASE}/", "Origin": BASE}, kept_cf
         )
-        resp = session.post(
-            f"{ATTENDANCE_URL}?random={'true' if self.method == 'random' else 'false'}",
-            timeout=25,
+        url = f"{ATTENDANCE_URL}?random={'true' if self.method == 'random' else 'false'}"
+        # 带一个空 JSON body：和站点前端发的请求一致，空 body 的 POST 更容易被 WAF 挑刺
+        resp, _ = self.browser_request(
+            lambda session: session.post(url, json={}, timeout=25),
+            cookie=cookie_str,
+            headers=headers,
         )
-
-        if looks_blocked(resp.status_code, resp.text):
-            raise RuntimeError(self._blocked_hint(resp.status_code))
 
         try:
             data = resp.json()
@@ -67,15 +66,13 @@ class NodeSeek(Site):
             body = (resp.text or "").strip().replace("\n", " ")[:100]
             raise RuntimeError(
                 f"返回非 JSON（HTTP {resp.status_code}）: {body} —— "
-                "通常是被 Cloudflare 拦了，见下方说明"
+                "站点没返回数据，通常是登录态失效或页面结构变了"
             ) from None
 
         lines: list[Line] = []
         if self.username:
             lines.append(Line("账号", self.username))
         lines.append(Line("签到方式", "随机鸡腿" if self.method == "random" else "固定 5 鸡腿"))
-        if not self.has_clearance:
-            lines.append(Line("提示", "Cookie 里没有 cf_clearance，代理换 IP 后可能突然 403"))
 
         message = str(data.get("message") or data.get("msg") or "")
         if data.get("success"):
@@ -93,20 +90,15 @@ class NodeSeek(Site):
 
         raise RuntimeError(f"签到失败: {message or f'HTTP {resp.status_code}'}")
 
-    def _blocked_hint(self, status: int) -> str:
-        return (
-            f"被 Cloudflare 拦截（HTTP {status}），请求没到 NodeSeek 服务器。三个办法：\n"
-            "1) 浏览器打开 nodeseek.com 完成一次验证，然后把 cf_clearance 一并复制进 Cookie；\n"
-            "2) 代理要固定出口 IP —— 每次换 IP 都会让 cf_clearance 失效；\n"
-            "3) 用直连或家宽出口，机房 IP 更容易被拦。"
-        )
-
     def verify(self) -> tuple[bool, str]:
         """只读检测：GET /api/account，能拿到用户名说明 session 有效。"""
-        session = self.session(headers={**XHR_HEADERS, "Referer": f"{BASE}/"})
-        resp = session.get(f"{BASE}/api/account", timeout=20)
-        if looks_blocked(resp.status_code, resp.text):
-            return False, f"被 Cloudflare 拦截（HTTP {resp.status_code}），出口 IP 或 cf_clearance 的问题"
+        cookie_str, kept_cf = self.cf_cookies()
+        headers = self.cf_headers({**XHR_HEADERS, "Referer": f"{BASE}/"}, kept_cf)
+        resp, _ = self.browser_request(
+            lambda session: session.get(f"{BASE}/api/account", timeout=20),
+            cookie=cookie_str,
+            headers=headers,
+        )
         if resp.status_code == 200:
             try:
                 data = resp.json()
@@ -114,4 +106,7 @@ class NodeSeek(Site):
                 return False, "返回非 JSON，可能被拦截"
             name = ((data or {}).get("member") or {}).get("member_name") or (data or {}).get("name")
             return True, f"Cookie 有效：{name}" if name else "Cookie 有效"
+        if resp.status_code in (401, 403):
+            return False, "Cookie 已失效（session 不被认可），重新登录再复制一次"
         return False, f"检测失败：HTTP {resp.status_code}"
+

@@ -50,7 +50,7 @@ SECURE_COOKIE = os.environ.get("PANEL_COOKIE_SECURE", "").strip().lower() in ("1
 ITERATIONS = 120_000
 COOKIE_NAME = "checkin_sid"
 # 这些字段只以打码形式回传到浏览器，保存时留空表示"不修改"
-SECRET_FIELDS = {"cookie", "a2", "password", "token"}
+SECRET_FIELDS = {"cookie", "a2", "password", "token", "sson"}
 MAX_BODY = 256 * 1024
 
 LOGIN_WINDOW = 300
