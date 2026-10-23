@@ -1,4 +1,4 @@
-requests>=2.31.0
+requests>=2.34.2
 # 可选但强烈建议装：curl_cffi 用 BoringSSL 复刻 Chrome / Safari 的 TLS 与 HTTP/2 指纹，
 # NodeSeek、LinuxDo 这类挂在 Cloudflare 后面的站点靠它才能稳定通过。
 # 装不上也能跑，只是这些站点更容易被 403。
