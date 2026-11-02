@@ -11,6 +11,7 @@ from .nodeseek import NodeSeek
 from .smzdm import Smzdm
 from .tieba import Tieba
 from .v2ex import V2ex
+from .wnflb import WnflbForum
 
 SITES = [
     BaiduPan,
@@ -22,6 +23,7 @@ SITES = [
     NodeSeek,
     Cloud189,
     LinuxDo,
+    WnflbForum,
 ]
 
 BY_KEY = {site.key.lower(): site for site in SITES}

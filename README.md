@@ -5,7 +5,7 @@
 - **GitHub Actions**：不用服务器，Fork 一份、填几个 Secret，每天定时跑完给你发通知
 - **NAS / Docker**：容器里常驻，带网页面板，能看每个站点的结果和历史，还能点一下手动签到
 
-支持 9 个站点，只依赖 `requests` 一个第三方库，浏览器面板用 Python 标准库实现，不装任何 Web 框架。
+支持 10 个站点，核心只依赖 `requests`（`curl_cffi` 为可选，用来过 Cloudflare），浏览器面板用 Python 标准库实现，不装任何 Web 框架。
 
 ---
 
@@ -16,6 +16,7 @@
 | 百度网盘 | Cookie（`BDUSS`、`STOKEN`） | 会员成长值签到 + 每日答题 |
 | 哔哩哔哩 | Cookie（`SESSDATA`、`bili_jct`） | 直播签到 + 漫画签到 + 大会员权益 |
 | 飞牛 NAS 论坛 | Cookie（`pvRK_2132_auth`） | Discuz 每日打卡（站点偶尔 503，会自动重试 3 次） |
+| 福利吧论坛 | Cookie（`S5r8_2132_auth`、`S5r8_2132_saltkey`） | Discuz `fx_checkin` 签到（打卡地址每次由页面现生成，程序自动取） |
 | 什么值得买 | Cookie（`sess`） | APP 接口签到 + 奖励明细 |
 | 百度贴吧 | Cookie（`BDUSS`） | 按关注列表逐吧签到 |
 | V2EX | Cookie 或 `A2` | `/mission/daily` 领每日登录奖励（已领过算成功，不报错） |
@@ -70,6 +71,7 @@ Fork 出来的仓库默认不跑工作流。进 **Actions** 标签，看到提�
 | `BAIDUWP_COOKIE` | 百度网盘的 Cookie（含 `BDUSS`、`STOKEN`） |
 | `BILIBILI_COOKIE` | B 站 Cookie（含 `SESSDATA`、`bili_jct`） |
 | `FNNASCLUB_COOKIE` | 飞牛论坛 Cookie（含 `pvRK_2132_auth`） |
+| `WNFLB_COOKIE` | 福利吧论坛 Cookie（含 `S5r8_2132_auth`、`S5r8_2132_saltkey`） |
 | `SMZDM_COOKIE` | 什么值得买 Cookie（`sess` 不能少） |
 | `TIEBA_COOKIE` | 贴吧 Cookie（含 `BDUSS`） |
 | `V2EX_COOKIE` 或 `V2EX_A2` | 二选一，`A2` 够用 |
@@ -354,6 +356,7 @@ Cookie 相当于账号密码，**别发给任何人、别贴到 issue 里**。�
 BAIDUWP_COOKIE="BAIDUID=xxx; BDUSS=yyy; STOKEN=zzz"
 BILIBILI_COOKIE="SESSDATA=xxx; bili_jct=yyy"
 FNNASCLUB_COOKIE="pvRK_2132_auth=xxx"
+WNFLB_COOKIE="S5r8_2132_auth=xxx; S5r8_2132_saltkey=yyy; S5r8_2132_sid=zzz"
 SMZDM_COOKIE="sess=xxx; __ckguid=yyy"
 TIEBA_COOKIE="BDUSS=xxx; STOKEN=yyy"
 V2EX_COOKIE="A2=xxx; V2EX_LANG=zhcn"
