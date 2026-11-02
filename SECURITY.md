@@ -13,6 +13,8 @@
 | `data/status.json` | 最近一次结果 + 最近 30 次历史 | 本机 / 容器 + 面板登录用户 |
 | `data/panel_auth.json` | PBKDF2 派生值、随机盐、会话签名密钥（**没有明文口令**） | 同上，文件权限 0600 |
 | `data/settings.json` | **在网页「设置」里保存过的 cookie / 账号密码 / 代理（明文）+ 定时时间表（无敏感信息）** | 同上，文件权限 0600 |
+| `data/cookies.json` | **从本机浏览器同步过来的 cookie（明文）** + 每条同步时间 | 同上，文件权限 0600 |
+| `%LOCALAPPDATA%\checkin-sync\panel_secret.bin`（只在你电脑上） | 面板口令，经 Windows DPAPI 加密 | 只有加密它的那个 Windows 账户能解开，换机器 / 换用户都无效 |
 | `data/token189/<哈希>.json` | 天翼云盘 189 的 `accessToken` / `refreshToken`（**等于登录态，不需要密码就能用 6 天**） | 同上，文件名是账号的 SHA-1 前缀（不暴露手机号），权限 0600 |
 | `data/schedule_state.json` | 今天已触发过哪几个时间点（只记 `09:10` 这种字符串） | 同上 |
 | `.env`（NAS 部署时） | 同上，明文 | 能读这个文件的人（建议 `chmod 600`） |
@@ -32,6 +34,9 @@
 - 会话是 HMAC-SHA256 签名的过期时间戳，`HttpOnly; SameSite=Lax`，默认 7 天
 - 改口令会轮换签名密钥，所有旧会话立即失效；改完给当前浏览器发一张新票据，不用重新登录
 - 登录失败按 IP 限速（5 分钟内 6 次），超限返回 429
+- `POST /api/cookies`（给本机同步脚本用）支持 `Authorization: Bearer <面板口令>`，
+  但**拒绝一切带 `Origin` 头的请求** —— 浏览器发起的跨站请求必带 `Origin`，命令行脚本不带，
+  这样即便口令被网页猜到也伪造不出写入请求；口令错误同样计入上面的限速窗口
 - 页面不加载任何外部资源，CSP 为 `default-src 'self'`，附 `X-Frame-Options: DENY`
 - 会话 cookie 是 `HttpOnly; SameSite=Lax`；套了 HTTPS 反代就把 `PANEL_COOKIE_SECURE=true` 加上
 - 所有写接口（`/api/run`、`/api/settings`、`/api/password`、`/api/check`）只接受 POST，

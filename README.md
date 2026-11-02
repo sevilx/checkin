@@ -325,15 +325,17 @@ python -m panel.server               # 起面板，默认 http://127.0.0.1:8080
 
 ## 凭据怎么填
 
-三种填法，任选其一（优先级：网页「设置」> 环境变量 > `config.json`）：
+四种填法，任选其一（优先级：**浏览器同步 > 网页「设置」> 环境变量 > `config.json`**，
+但你在网页里手填过 cookie 的站点会自动停用浏览器同步，相当于"手填即接管"）：
 
 | 填哪 | 适合 |
 | --- | --- |
 | `.env` 或 GitHub Secrets | Actions 部署；不想让凭据落在容器磁盘 |
 | `config.json` | 账号多、想一处集中管理 |
 | 网页「设置」（仅 Docker） | 不想 SSH 改文件，想随时换 cookie；见[网页面板](#网页面板) |
+| 浏览器自动同步（仅 Docker） | cookie 换得勤（52pojie、LinuxDo）、不想每次开 F12；见[下一节](#不想手动复制浏览器自动同步) |
 
-下面先讲怎么拿到 cookie，再分别说这三种写法。
+下面先讲怎么拿到 cookie，再分别说这几种写法。
 
 ### Cookie 通用取法
 
@@ -350,7 +352,38 @@ python -m panel.server               # 起面板，默认 http://127.0.0.1:8080
 
 Cookie 相当于账号密码，**别发给任何人、别贴到 issue 里**。失效是这类工具的通病，日志会明确写"Cookie 已失效"，重新复制一次即可。
 
-### 两种配置来源
+### 不想手动复制：浏览器自动同步
+
+上面那套 F12 复制，对"一周要换一两次"的 cookie 来说太磨人。
+如果你的签到跑在 NAS 上、平时上网用的是电脑上的浏览器，可以直接把浏览器里
+**现成的登录态**推过去 —— 在**你自己的电脑上**（不是 NAS 上）跑：
+
+```bash
+# 第一次会问面板口令，之后用 Windows DPAPI 记住（只有这台机器的这个账户能解）
+python tools/sync_cookies.py --nas http://192.168.1.10:8181 --remember
+```
+
+它做三件事：找到 Firefox 的 `cookies.sqlite`（复制副本再读，浏览器开着也不影响）→
+按域名把 cookie 归到各个站点 → POST 给面板，存进 `data/cookies.json`。
+之后签到自动用这份，**不用重启容器**。
+
+| 场景 | 命令 |
+| --- | --- |
+| 只看会推送什么，不发送 | `--dry-run` |
+| 只更新某几个站 | `--sites pojie,kafan,linuxdo` |
+| 推送后顺便验一次登录态 | `--check` |
+| 看看本机有哪些 Firefox profile | `--list` |
+| Edge / Chrome 用户 | 装 Cookie-Editor 扩展 → 导出 JSON → `--from-json cookies.json` |
+| 便携版 / 装在别的盘 | `--profile "D:\Program Files (x86)\RunningCheeseFirefox\Profiles"`（**指定一次就会记住**） |
+| 不想开命令行 | 双击 `tools\sync.cmd`（NAS 地址改文件开头那行） |
+
+面板「设置」页的 **浏览器 Cookie 同步** 卡片会列出每个站点上次同步的时间，
+超过 48 小时标黄提醒你重新同步。手工在面板里填了新 cookie 的站点会自动停用同步。
+
+细节、怎么让它每天自动跑、以及为什么不建议为了一个站点上 Playwright，
+见 [docs/cookie-sync.md](docs/cookie-sync.md)。
+
+### 手工填写：环境变量 / config.json
 
 **A. 环境变量**（推荐，也是 Actions 唯一的方式）
 

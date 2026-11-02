@@ -1,0 +1,25 @@
+# ---- 凭据与本地状态（绝对不要提交）----
+.env
+.env.*
+!.env.example
+config.json
+data/
+logs/
+*.log
+
+# ---- 依赖 ----
+runtime189/node_modules/
+node_modules/
+
+# ---- Python ----
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+
+# ---- 编辑器 / 系统 ----
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/

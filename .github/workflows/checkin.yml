@@ -49,6 +49,9 @@ jobs:
           BAIDUWP_COOKIE: ${{ secrets.BAIDUWP_COOKIE }}
           BILIBILI_COOKIE: ${{ secrets.BILIBILI_COOKIE }}
           FNNASCLUB_COOKIE: ${{ secrets.FNNASCLUB_COOKIE }}
+          WNFLB_COOKIE: ${{ secrets.WNFLB_COOKIE }}
+          POJIE_COOKIE: ${{ secrets.POJIE_COOKIE }}
+          KAFAN_COOKIE: ${{ secrets.KAFAN_COOKIE }}
           SMZDM_COOKIE: ${{ secrets.SMZDM_COOKIE }}
           TIEBA_COOKIE: ${{ secrets.TIEBA_COOKIE }}
           V2EX_COOKIE: ${{ secrets.V2EX_COOKIE }}

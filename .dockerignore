@@ -1,0 +1,18 @@
+# 不要把凭据和本地状态打进镜像
+.env
+.env.*
+config.json
+data/
+logs/
+*.log
+runtime189/node_modules/
+node_modules/
+__pycache__/
+*.py[cod]
+.git/
+.github/
+.venv/
+venv/
+.DS_Store
+# 给 Windows 本机用的同步脚本，容器里用不到（容器里没有浏览器 cookie 库）
+tools/

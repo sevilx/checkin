@@ -21,7 +21,7 @@ import os
 import re
 from pathlib import Path
 
-from . import settings
+from . import cookiesync, settings
 
 ROOT = Path(__file__).resolve().parent.parent
 CONFIG_FILE = ROOT / "config.json"
@@ -93,32 +93,55 @@ def _env_accounts(prefix: str, fields: tuple[str, ...]) -> list[dict]:
 
 
 def collect_accounts(site_cls, file_cfg: dict) -> list[dict]:
-    """收集某站点的账号，优先级：面板设置 > 环境变量 > config.json。
+    """收集某站点的账号，优先级：浏览器同步 > 面板设置 > 环境变量 > config.json。
 
     proxy 与 name（备注）对所有站点通用，不需要每个模块自己声明：
         V2EX_PROXY=http://...      V2EX_NAME=主号
         V2EX_COOKIE_2=...          V2EX_NAME_2=小号
+
+    浏览器同步层只覆盖 `cookie` 一个字段（见 cookiesync.py），其余字段仍然来自下面三层。
     """
     fields = tuple(site_cls.fields) + ("proxy", "name")
 
     panel_accounts = settings.site_accounts(site_cls.key)
     if panel_accounts:
-        return panel_accounts
+        accounts = panel_accounts
+    else:
+        accounts = _env_accounts(site_cls.key, fields)
+        if not accounts:
+            raw = file_cfg.get(site_cls.key)
+            if isinstance(raw, dict):
+                accounts = [raw]
+            elif isinstance(raw, list):
+                accounts = [item for item in raw if isinstance(item, dict)]
+            else:
+                accounts = []
 
-    env_accounts = _env_accounts(site_cls.key, fields)
-    if env_accounts:
-        return env_accounts
+    return _apply_synced_cookie(site_cls, accounts)
 
-    raw = file_cfg.get(site_cls.key)
-    if isinstance(raw, dict):
-        return [raw]
-    if isinstance(raw, list):
-        return [item for item in raw if isinstance(item, dict)]
-    return []
+
+def _apply_synced_cookie(site_cls, accounts: list[dict]) -> list[dict]:
+    """把浏览器同步来的 cookie 覆盖到第一个账号上。
+
+    只对声明了 cookie 字段的站点生效；没有账号时直接用它建一个，
+    这样"新装一个站点、只在浏览器里登过"也能跑起来。
+    """
+    if "cookie" not in tuple(site_cls.fields):
+        return accounts
+    synced = cookiesync.cookie_for(site_cls.key)
+    if not synced:
+        return accounts
+    if not accounts:
+        return [{"cookie": synced}]
+    first = dict(accounts[0])
+    first["cookie"] = synced
+    return [first] + list(accounts[1:])
 
 
 def account_source(site_cls, file_cfg: dict | None = None) -> str:
-    """这个站点的账号是从哪来的：panel / env / file / none。给面板显示来源用。"""
+    """这个站点的账号是从哪来的：sync / panel / env / file / none。给面板显示来源用。"""
+    if "cookie" in tuple(site_cls.fields) and cookiesync.has(site_cls.key):
+        return "sync"
     if settings.site_accounts(site_cls.key):
         return "panel"
     fields = tuple(site_cls.fields) + ("proxy", "name")

@@ -28,6 +28,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
+from checkin import cookiesync
 from checkin import schedule as sched
 from checkin import settings as cfgstore
 from checkin import store
@@ -333,6 +334,7 @@ def build_settings_payload() -> dict:
         },
         "password": {"source": password_source()},
         "schedule": schedule_payload(),
+        "cookie_sync": cookie_sync_payload(),
     }
 
 
@@ -380,6 +382,17 @@ def save_site_accounts(key: str, incoming: list) -> tuple[bool, str]:
         merged.append(account)
 
     cfgstore.set_site(site_cls.key, merged)
+
+    # 手动填了新 cookie 就以你填的为准：清掉同步记录，否则同步层优先级更高会把它盖回去。
+    # 只是改代理 / 备注（cookie 留空）时不动同步记录。
+    if "cookie" in _editable_fields(site_cls):
+        touched = any(
+            isinstance(item, dict) and str((item.get("values") or {}).get("cookie") or "").strip()
+            for item in (incoming or [])
+        )
+        if touched and cookiesync.remove([site_cls.key]):
+            return True, f"{site_cls.name} 已保存 {len(merged)} 个账号（已停用该站的浏览器同步）"
+
     if merged:
         return True, f"{site_cls.name} 已保存 {len(merged)} 个账号"
     return True, f"{site_cls.name} 已清空，改用 .env / config.json 的配置"
@@ -393,6 +406,75 @@ def check_account(key: str, index) -> tuple[str, str]:
     if not (0 <= index < len(accounts)):
         return "unknown", "这个账号不存在，先保存配置再检测"
     return verify_account(site_cls, accounts[index], index)
+
+
+# ---------------------------------------------------------------------- #
+# 浏览器 Cookie 同步
+# ---------------------------------------------------------------------- #
+# 只有声明了 cookie 字段的站点才吃同步层（天翼云盘是账密 / sson，不走这条路）
+COOKIE_SITES = {site_cls.key.upper() for site_cls in SITES if "cookie" in tuple(site_cls.fields)}
+
+
+def cookie_sync_payload() -> dict:
+    return {
+        "stale_hours": cookiesync.STALE_HOURS,
+        "supported": sorted(COOKIE_SITES),
+        "updated_at": cookiesync.load().get("updated_at"),
+        "sites": cookiesync.summary(),
+    }
+
+
+def import_cookies(raw_items, source: str = "panel", do_check: bool = False) -> dict:
+    """写入同步层。只认识 cookie 字段的站点，未知 KEY 直接忽略并回报。"""
+    items: dict[str, dict] = {}
+    ignored: list[str] = []
+
+    if isinstance(raw_items, list):
+        # 也接受 [{"site": "POJIE", "cookie": "..."}] 这种更啰嗦但更好读的写法
+        for item in raw_items:
+            if isinstance(item, dict) and item.get("site"):
+                items[str(item["site"]).upper()] = {
+                    "cookie": item.get("cookie") or "",
+                    "expires": item.get("expires"),
+                }
+    elif isinstance(raw_items, dict):
+        for key, value in raw_items.items():
+            key = str(key).upper()
+            if isinstance(value, dict):
+                items[key] = {"cookie": value.get("cookie") or "", "expires": value.get("expires")}
+            else:
+                items[key] = {"cookie": str(value or "")}
+
+    unknown = sorted(k for k in items if k not in COOKIE_SITES)
+    for key in unknown:
+        items.pop(key, None)
+        ignored.append(key)
+
+    result = cookiesync.put(items, source=source)
+    response = {
+        "ok": True,
+        "written": result["written"],
+        "updated_at": result["updated_at"],
+        "ignored": ignored,
+        "sites": cookiesync.summary(),
+    }
+
+    if do_check:
+        # 只检测刚写进来的站点，挨个打一次真实请求，结果直接回给脚本
+        checks: dict[str, dict] = {}
+        file_cfg = load_file_config()
+        for key in sorted(items):
+            site_cls = BY_KEY.get(key.lower())
+            if not site_cls:
+                continue
+            accounts = collect_accounts(site_cls, file_cfg)
+            if not accounts:
+                continue
+            status, message = verify_account(site_cls, accounts[0], 0)
+            checks[key] = {"status": status, "message": message}
+        response["checks"] = checks
+
+    return response
 
 
 # ---------------------------------------------------------------------- #
@@ -440,6 +522,31 @@ class Handler(BaseHTTPRequestHandler):
 
     def _authed(self) -> bool:
         return token_valid(self._token())
+
+    def _script_authed(self) -> bool:
+        """给本机同步脚本用的口令鉴权（`Authorization: Bearer <面板口令>`）。
+
+        为什么不复用会话：脚本每天可能被计划任务拉起来跑，先登录再拿 cookie
+        多一次往返，还要自己维护会话；直接带口令一次到位。
+
+        带 Origin 头的请求一律拒绝 —— 浏览器的 fetch / 表单一定会带，
+        而命令行脚本不会，这样即便口令被网页猜到也伪造不出来。
+        """
+        header = self.headers.get("Authorization", "")
+        if not header.lower().startswith("bearer "):
+            return False
+        if self.headers.get("Origin"):
+            return False
+        password = header.split(None, 1)[1].strip()
+        if not password:
+            return False
+        ip = self._client_ip()
+        if _rate_limited(ip):
+            return False
+        if verify_password(password):
+            return True
+        _record_failure(ip)
+        return False
 
     def _client_ip(self) -> str:
         forwarded = self.headers.get("X-Forwarded-For", "")
@@ -515,6 +622,9 @@ class Handler(BaseHTTPRequestHandler):
             if path == "/api/settings":
                 self._json(build_settings_payload())
                 return
+            if path == "/api/cookies":
+                self._json(cookie_sync_payload())
+                return
             self._json({"error": "not found"}, 404)
             return
 
@@ -570,7 +680,9 @@ class Handler(BaseHTTPRequestHandler):
             return
 
         if path.startswith("/api/"):
-            if not self._authed():
+            # 同步脚本走 Bearer 口令，其余接口只认面板会话
+            trusted_script = path == "/api/cookies" and self._script_authed()
+            if not (self._authed() or trusted_script):
                 self._json({"error": "unauthorized"}, 401)
                 return
             if not self._same_origin():
@@ -578,11 +690,37 @@ class Handler(BaseHTTPRequestHandler):
                 return
             body = self._json_body(raw)
 
+            if path == "/api/cookies":
+                if not ALLOW_EDIT:
+                    self._json({"ok": False, "message": "面板已禁用配置修改（PANEL_ALLOW_EDIT=false）"}, 403)
+                    return
+                if body.get("clear") is True:
+                    removed = cookiesync.clear()
+                    self._json({"ok": True, "removed": removed, "sites": cookiesync.summary()})
+                    return
+                cleared = body.get("clear")
+                if isinstance(cleared, list):
+                    removed = cookiesync.remove(cleared)
+                    self._json({"ok": True, "removed": removed, "sites": cookiesync.summary()})
+                    return
+                items = body.get("cookies")
+                if not isinstance(items, (dict, list)):
+                    self._json({"ok": False, "message": "cookies 字段格式不对"}, 400)
+                    return
+                payload = import_cookies(
+                    items,
+                    source=str(body.get("source") or "script"),
+                    do_check=bool(body.get("check")),
+                )
+                self._json(payload)
+                return
+
             if path == "/api/settings":
                 if not ALLOW_EDIT:
                     self._json({"ok": False, "message": "面板已禁用配置修改（PANEL_ALLOW_EDIT=false）"}, 403)
                     return
                 sites = body.get("sites")
+                notices: list[str] = []
                 if isinstance(sites, dict):
                     for key, accounts in sites.items():
                         if not isinstance(accounts, list):
@@ -591,6 +729,7 @@ class Handler(BaseHTTPRequestHandler):
                         if not ok:
                             self._json({"ok": False, "message": message}, 400)
                             return
+                        notices.append(message)
                 proxies = body.get("proxy")
                 if isinstance(proxies, dict):
                     global_value = proxies.get("global")
@@ -599,7 +738,8 @@ class Handler(BaseHTTPRequestHandler):
                         None if global_value is None else str(global_value),
                         site_values if isinstance(site_values, dict) else None,
                     )
-                self._json({"ok": True, "message": "已保存，下次签到生效", "settings": build_settings_payload()})
+                summary = "；".join(notices[:3]) if notices else "已保存，下次签到生效"
+                self._json({"ok": True, "message": summary, "settings": build_settings_payload()})
                 return
 
             if path == "/api/password":

@@ -57,6 +57,31 @@
   .badge { font-size: 12px; padding: 2px 9px; border-radius: 999px; white-space: nowrap; background: var(--accent-soft); color: var(--accent); }
   .badge.env { background: var(--warn-bg); color: var(--warn); }
   .badge.none { background: transparent; color: var(--muted); border: 1px dashed var(--line); }
+  .badge.sync { background: var(--ok-bg); color: var(--ok); }
+  pre.cmd {
+    background: var(--bg); border: 1px solid var(--line); border-radius: 8px;
+    padding: 10px 12px; margin: 12px 0 0; font-size: 12px; overflow-x: auto;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; user-select: all;
+  }
+  select {
+    font: inherit; font-size: 13px; padding: 7px 10px; border-radius: 8px;
+    border: 1px solid var(--line); background: var(--bg); color: var(--text);
+  }
+  label.f > select { flex: 1; min-width: 0; }
+  .syncrow {
+    display: grid; grid-template-columns: 96px 104px 1fr auto; gap: 10px;
+    align-items: center; padding: 7px 0; border-bottom: 1px dashed var(--line); font-size: 13px;
+  }
+  .syncrow:last-child { border-bottom: none; }
+  .syncrow .k { font-weight: 600; }
+  .syncrow .t { color: var(--muted); font-size: 12px; }
+  .syncrow .c {
+    color: var(--muted); font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: var(--ok); margin-right: 6px; }
+  .dot.stale { background: var(--warn); }
+  details > summary { cursor: pointer; color: var(--muted); font-size: 13px; margin-top: 14px; }
   .hint { color: var(--muted); font-size: 12px; margin: 6px 0 0; }
   .hint.warn { color: var(--warn); }
   label.f { display: flex; gap: 10px; align-items: flex-start; margin-top: 10px; }
@@ -112,6 +137,32 @@
   </div>
 
   <div class="card">
+    <div class="top"><span class="name">浏览器 Cookie 同步</span><span class="meta" id="syncMeta"></span></div>
+    <div class="body">
+      <p class="hint">在电脑浏览器里登录论坛后，把那份 cookie 一键推到这台 NAS。
+        论坛会话通常只有几小时到几天有效期，把浏览器里现成的长这样同步过来，
+        就不用为了 52pojie 这类带 JS 防护的站点在 NAS 上再跑一个浏览器。</p>
+      <div id="syncList"><p class="hint">还没有同步过任何站点。</p></div>
+      <div class="row-actions">
+        <button id="syncCmd" type="button">显示推送命令</button>
+        <button id="syncClear" type="button" class="danger">清空同步记录</button>
+      </div>
+      <pre class="cmd" id="syncCmdBox" hidden></pre>
+
+      <details>
+        <summary>没装 Firefox，或者只想更新某一个站点？在这里手动粘贴</summary>
+        <label class="f"><span>站点</span><select id="pasteSite"></select></label>
+        <label class="f"><span>Cookie</span>
+          <textarea id="pasteCookie" placeholder="从浏览器 F12 → 网络 → 任意请求 → 请求标头里的 Cookie 整行，直接粘进来"></textarea>
+        </label>
+        <div class="row-actions"><button class="primary" id="pasteSave" type="button">导入这个站点</button></div>
+        <p class="hint">HttpOnly 的 cookie（比如 LinuxDo 的 <code>_t</code>）在控制台敲
+          <code>document.cookie</code> 是看不到的，必须从「网络 → 请求标头」整行复制。</p>
+      </details>
+    </div>
+  </div>
+
+  <div class="card">
     <div class="top"><span class="name">定时运行</span><span class="meta" id="schedMeta"></span></div>
     <div class="body">
       <label class="f"><span>启用</span>
@@ -145,7 +196,8 @@
 <script>
 (function () {
   var DATA = null;
-  var SOURCE_TEXT = { panel: '面板配置', env: '环境变量', file: 'config.json', none: '未配置' };
+  var SOURCE_TEXT = { sync: '浏览器同步', panel: '面板配置', env: '环境变量', file: 'config.json', none: '未配置' };
+  var BADGE_CLASS = { sync: ' sync', panel: '', env: ' env', file: ' none', none: ' none' };
 
   function $(sel, root) { return (root || document).querySelector(sel); }
   function $$(sel, root) { return Array.prototype.slice.call((root || document).querySelectorAll(sel)); }
@@ -204,11 +256,15 @@
   function siteCard(site) {
     var accounts = (site.accounts || []).map(function (acct, i) { return accountBlock(site, acct, i); }).join('');
     var source = SOURCE_TEXT[site.source] || site.source;
-    var badgeClass = site.source === 'panel' ? '' : (site.source === 'env' ? ' env' : ' none');
-    var warn = site.source === 'env' || site.source === 'file'
-      ? '<p class="hint warn">这个站点当前用 ' + esc(source) + ' 的配置。在这里保存后会由面板接管，' +
-        esc(source) + ' 里的同名配置不再生效；清空所有账号并保存可以还原。</p>'
-      : '';
+    var badgeClass = BADGE_CLASS[site.source] !== undefined ? BADGE_CLASS[site.source] : ' none';
+    var warn = '';
+    if (site.source === 'env' || site.source === 'file') {
+      warn = '<p class="hint warn">这个站点当前用 ' + esc(source) + ' 的配置。在这里保存后会由面板接管，' +
+        esc(source) + ' 里的同名配置不再生效；清空所有账号并保存可以还原。</p>';
+    } else if (site.source === 'sync') {
+      warn = '<p class="hint">cookie 来自浏览器同步，优先级最高，会盖过 .env 和面板里的设置。' +
+        '想改回手动配置，在下面填一个新的 cookie 保存，或者到上面「清空同步记录」。</p>';
+    }
     return '<div class="card site" data-key="' + esc(site.key) + '">' +
       '<div class="top"><span class="name">' + esc(site.name) + '</span>' +
       '<span class="meta">' + esc(site.key) + '</span>' +
@@ -289,6 +345,50 @@
     $('#schedHint').textContent = lines.join(' ');
   }
 
+  // ---------------- 浏览器 Cookie 同步 ----------------
+  function agoText(hours) {
+    if (hours == null) return '时间未知';
+    if (hours < 1) return Math.max(1, Math.round(hours * 60)) + ' 分钟前';
+    if (hours < 48) return Math.round(hours) + ' 小时前';
+    return Math.round(hours / 24) + ' 天前';
+  }
+
+  function renderSync(sync) {
+    sync = sync || {};
+    var sites = sync.sites || {};
+    var keys = Object.keys(sites).sort();
+    $('#syncMeta').textContent = keys.length ? '已同步 ' + keys.length + ' 个站点' : '未同步';
+
+    if (!keys.length) {
+      $('#syncList').innerHTML = '<p class="hint">还没有同步过任何站点。' +
+        '点下面「显示推送命令」，在你电脑上跑一次，结果就会出现在这里。</p>';
+    } else {
+      $('#syncList').innerHTML = keys.map(function (key) {
+        var item = sites[key];
+        var title = (item.names || []).join(', ') + (item.count > (item.names || []).length ? ' …' : '');
+        return '<div class="syncrow">' +
+          '<span class="k">' + esc(key) + '</span>' +
+          '<span class="t"><span class="dot' + (item.stale ? ' stale' : '') + '"></span>' +
+            esc(agoText(item.age_hours)) + '</span>' +
+          '<span class="c" title="' + esc(title) + '">' + esc(item.masked) + '</span>' +
+          '<span class="t">' + (item.count || 0) + ' 个字段 / ' + (item.bytes || 0) + ' 字节</span>' +
+          '</div>';
+      }).join('') +
+      '<p class="hint">绿点表示是最近同步的；黄点是超过 ' + (sync.stale_hours || 48) +
+      ' 小时的记录，cookie 很可能已经过期，重新同步一次。</p>';
+    }
+
+    var select = $('#pasteSite');
+    var keep = select.value;
+    var withCookie = (DATA.sites || []).filter(function (s) {
+      return (s.fields || []).indexOf('cookie') >= 0;
+    });
+    select.innerHTML = withCookie.map(function (s) {
+      return '<option value="' + esc(s.key) + '">' + esc(s.name) + '（' + esc(s.key) + '）</option>';
+    }).join('');
+    if (keep) select.value = keep;
+  }
+
   // ---------------- 加载 ----------------
   function apply(settings) {
     DATA = settings;
@@ -302,8 +402,9 @@
     renderProxies(settings.proxy || {});
     renderSchedule(settings.schedule || {});
     renderSites(settings.sites || []);
+    renderSync(settings.cookie_sync || {});
     if (!settings.allow_edit) {
-      $$('#sites button, #sites input, #sites textarea, #pwSave, #proxySave, #pwCurrent, #pwNext, #pwNext2, #proxyGlobal, .psite, #schedSave, #schedEnabled, #schedTimes')
+      $$('#sites button, #sites input, #sites textarea, #pwSave, #proxySave, #pwCurrent, #pwNext, #pwNext2, #proxyGlobal, .psite, #schedSave, #schedEnabled, #schedTimes, #syncCmd, #syncClear, #pasteSave, #pasteSite, #pasteCookie')
         .forEach(function (el) { el.disabled = true; });
     }
   }
@@ -429,6 +530,54 @@
         }
       })
       .catch(function () { toast('修改失败'); })
+      .finally(function () { btn.disabled = false; });
+  });
+
+  // ---------------- Cookie 同步交互 ----------------
+  $('#syncCmd').addEventListener('click', function () {
+    var box = $('#syncCmdBox');
+    if (!box.hidden) { box.hidden = true; return; }
+    box.textContent = 'python tools/sync_cookies.py --nas ' + location.origin + ' --remember';
+    box.hidden = false;
+    box.addEventListener('click', function () {
+      var range = document.createRange();
+      range.selectNodeContents(box);
+      var selection = window.getSelection();
+      selection.removeAllRanges();
+      selection.addRange(range);
+    });
+  });
+
+  $('#syncClear').addEventListener('click', function () {
+    if (!confirm('清空所有浏览器同步来的 cookie？各站点会退回到 .env / 面板里的配置。')) return;
+    var btn = this;
+    btn.disabled = true;
+    api('/api/cookies', { clear: true })
+      .then(function (data) {
+        toast('已清空 ' + (data.removed || 0) + ' 条同步记录');
+        if (data.ok) load();
+      })
+      .catch(function () { toast('清空失败'); })
+      .finally(function () { btn.disabled = false; });
+  });
+
+  $('#pasteSave').addEventListener('click', function () {
+    var key = $('#pasteSite').value;
+    var value = $('#pasteCookie').value.trim();
+    if (!key) { toast('先选一个站点'); return; }
+    if (!value) { toast('先把 cookie 粘进来'); return; }
+    var payload = { cookies: {}, source: 'panel' };
+    payload.cookies[key] = value;
+    var btn = this;
+    btn.disabled = true;
+    api('/api/cookies', payload)
+      .then(function (data) {
+        if (!data.ok) { toast(data.message || '导入失败'); return; }
+        $('#pasteCookie').value = '';
+        toast(key + ' 已导入，下次签到生效');
+        load();
+      })
+      .catch(function () { toast('导入失败'); })
       .finally(function () { btn.disabled = false; });
   });
 

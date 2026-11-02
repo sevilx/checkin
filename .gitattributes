@@ -1,0 +1,9 @@
+* text=auto eol=lf
+
+*.sh text eol=lf
+*.yml text eol=lf
+*.py text eol=lf
+
+# Windows 批处理必须 CRLF：纯 LF 下 cmd.exe 解析 goto/标签块会出错
+*.cmd text eol=crlf
+*.bat text eol=crlf
