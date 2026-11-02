@@ -16,7 +16,7 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       # GHCR 的镜像名必须全小写，仓库所有者含大写时会失败
       - id: repo
