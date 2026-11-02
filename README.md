@@ -353,19 +353,28 @@ Cookie 相当于账号密码，**别发给任何人、别贴到 issue 里**。�
 
 ```bash
 # 单账号
-BAIDUWP_COOKIE="BAIDUID=xxx; BDUSS=yyy; STOKEN=zzz"
-BILIBILI_COOKIE="SESSDATA=xxx; bili_jct=yyy"
-FNNASCLUB_COOKIE="pvRK_2132_auth=xxx"
-WNFLB_COOKIE="S5r8_2132_auth=xxx; S5r8_2132_saltkey=yyy; S5r8_2132_sid=zzz"
-SMZDM_COOKIE="sess=xxx; __ckguid=yyy"
-TIEBA_COOKIE="BDUSS=xxx; STOKEN=yyy"
-V2EX_COOKIE="A2=xxx; V2EX_LANG=zhcn"
-NODESEEK_COOKIE="session=xxx; pjwt=yyy"
+BAIDUWP_COOKIE='BAIDUID=xxx; BDUSS=yyy; STOKEN=zzz'
+BILIBILI_COOKIE='SESSDATA=xxx; bili_jct=yyy'
+FNNASCLUB_COOKIE='pvRK_2132_auth=xxx'
+WNFLB_COOKIE='S5r8_2132_auth=xxx; S5r8_2132_saltkey=yyy; S5r8_2132_sid=zzz'
+SMZDM_COOKIE='sess=xxx; __ckguid=yyy'
+TIEBA_COOKIE='BDUSS=xxx; STOKEN=yyy'
+V2EX_COOKIE='A2=xxx; V2EX_LANG=zhcn'
+NODESEEK_COOKIE='session=xxx; pjwt=yyy'
 NODESEEK_METHOD=fixed
-LINUXDO_COOKIE="_t=xxx; _forum_session=yyy"
+LINUXDO_COOKIE='_t=xxx; _forum_session=yyy'
 TY189_USERNAME=13800000000
-TY189_PASSWORD=你的密码
+TY189_PASSWORD='你的密码'
 ```
+
+> **cookie 一律用单引号包住，不要用双引号。**
+> `docker compose` 读 `.env` 时，双引号里的内容会被解释转义、还会把 `$VAR` 当变量替换。
+> cookie 里只要出现一个 `"`（比如 GA 的 `_ga` 值是一段 JSON）或一个 `$`，就会报
+> `unexpected character "\"" in variable name`，或者值被悄悄改短。单引号内一律原样保留。
+> 只有值本身含单引号时才反过来用双引号，并把内部的 `"` 写成 `\"`、`$` 写成 `\$`。
+>
+> 顺带一提：`_ga`、`_ga_XXXX`、`_gid`、`__cfuvid`、`_cfuvid` 这几个是统计用的，签到完全不需要，
+> 删掉能让 cookie 短很多，也少一类解析事故。
 
 多个账号、备注、单个账号走代理，后缀统一用 `_2`、`_3`：
 
@@ -413,9 +422,11 @@ cp config.example.json config.json
 
 #### 两种写法怎么互换
 
+下表「环境变量」一列的值统一用单引号包住（原因见上一节）。
+
 | `config.json` | 环境变量 |
 | --- | --- |
-| `"V2EX": [{ "cookie": "A2=xxx", "name": "主号" }]` | `V2EX_COOKIE="A2=xxx"` + `V2EX_NAME=主号` |
+| `"V2EX": [{ "cookie": "A2=xxx", "name": "主号" }]` | `V2EX_COOKIE='A2=xxx'` + `V2EX_NAME=主号` |
 | 同一站点数组里的第二项 | 所有字段加 `_2`：`V2EX_COOKIE_2`、`V2EX_NAME_2` |
 | `"TY189": [{ "username": "...", "password": "..." }]` | `TY189_USERNAME=...` + `TY189_PASSWORD=...` |
 | `"NODESEEK": [{ "cookie": "...", "method": "fixed" }]` | `NODESEEK_COOKIE=...` + `NODESEEK_METHOD=fixed` |
@@ -435,14 +446,14 @@ cp config.example.json config.json
 A（`.env` 或 Secrets）：
 
 ```bash
-V2EX_COOKIE="A2=xxx"
+V2EX_COOKIE='A2=xxx'
 V2EX_NAME=主号
 
 TY189_USERNAME=13800000000
-TY189_PASSWORD=xxx
+TY189_PASSWORD='xxx'
 TY189_NAME=小号
 
-NODESEEK_COOKIE="session=xxx"
+NODESEEK_COOKIE='session=xxx'
 NODESEEK_METHOD=fixed
 ```
 
@@ -613,6 +624,22 @@ compose 先试着去 Docker Hub 拉同名镜像，失败后才用本地构建，
 2. `build: .` 是否已注释掉
 3. 手动拉一次看真实报错：`docker pull ghcr.io/<你的用户名>/checkin:latest`。报 `denied` 说明包是私有的，回 GitHub 包设置改成 Public，或者 `docker login ghcr.io`
 4. 拉成功后再 `docker compose up -d`
+
+**`up` 报 `failed to read .env: line N: unexpected character "\"" in variable name`？**
+`.env` 里第 N 行的值触发了 Docker 的变量替换。`docker compose` 读 `.env` 时会对非单引号的值做 `$VAR` 替换，而 GA 的 `_ga` 类 cookie 值恰好长这样：`GS2.1.s1775...$o17$g0$t1775...$h1980058543` —— 一堆 `$`。解析器在 `$` 后面撞上 `"`，就把 `"` 当成变量名的非法字符报出来。改法：
+
+```bash
+# 1. 找出所有含双引号 / 美元符号的行
+grep -nE '^[A-Za-z0-9_]+=.*["$]' .env
+
+# 2. 把这些行的外层双引号换成单引号（单引号内原样保留，不用转义）
+LINUXDO_COOKIE='_t=xxx; _forum_session=yyy'
+
+# 3. 验证能解析
+docker compose config -q && echo OK
+```
+
+实在不想改：把那行留空，`docker compose up -d` 起来后在面板「设置」里填 —— 面板存进 `data/settings.json`，不经过 `.env` 解析。
 
 **换成预构建镜像后怎么更新？**
 `docker compose pull && docker compose up -d`。`./data` 不要删，配置和历史都在里面。
