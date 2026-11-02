@@ -5,7 +5,7 @@
 - **GitHub Actions**：不用服务器，Fork 一份、填几个 Secret，每天定时跑完给你发通知
 - **NAS / Docker**：容器里常驻，带网页面板，能看每个站点的结果和历史，还能点一下手动签到
 
-支持 10 个站点，核心只依赖 `requests`（`curl_cffi` 为可选，用来过 Cloudflare），浏览器面板用 Python 标准库实现，不装任何 Web 框架。
+支持 12 个站点，核心只依赖 `requests`（`curl_cffi` 为可选，用来过 Cloudflare），浏览器面板用 Python 标准库实现，不装任何 Web 框架。
 
 ---
 
@@ -23,6 +23,8 @@
 | NodeSeek | Cookie（`session`） | 随机 / 固定鸡腿（Cloudflare 站点，自动换浏览器指纹） |
 | 天翼云盘 189 | 手机号 + 密码，或 `SSON` | 个人空间签到 + 容量变化（登录成功后会话缓存 6 天） |
 | LinuxDo | Cookie（含 `_t`） | 登录保活 + 浏览任务（该站本身没有签到按钮） |
+| 吾爱破解 | Cookie（含 `_2132_auth`、`_2132_saltkey`） | Discuz 任务系统签到（有瑞数动态防护，见 [FAQ](#faq)） |
+| 卡饭论坛 | Cookie（含 `_2132_auth`、`_2132_saltkey`） | 站点 GBK 编码；签到现在是登录即自动完成，本项做状态确认 |
 
 > NodeSeek、LinuxDo、V2EX 都挂在 Cloudflare 后面，**机房 IP 或频繁换 IP 的代理容易被拦成 403**。
 > 程序会用 `curl_cffi` 模仿真实浏览器的 TLS 指纹、并在被拦时自动换几种指纹重试，
@@ -78,6 +80,8 @@ Fork 出来的仓库默认不跑工作流。进 **Actions** 标签，看到提�
 | `NODESEEK_COOKIE` | 至少含 `session`，建议连 `pjwt` 一起 |
 | `NODESEEK_METHOD` | `random`（默认）或 `fixed`，可不填 |
 | `LINUXDO_COOKIE` | 含 `_t`、`_forum_session` |
+| `POJIE_COOKIE` | 吾爱破解 Cookie（含 `_2132_auth`、`_2132_saltkey`） |
+| `KAFAN_COOKIE` | 卡饭论坛 Cookie（含 `_2132_auth`、`_2132_saltkey`） |
 | `TY189_USERNAME` / `TY189_PASSWORD` | 天翼账号 + 密码 |
 | 推送渠道 | 见[推送通知](#推送通知)，至少配一组，不配就只写日志 |
 
@@ -227,7 +231,8 @@ docker compose up -d --build
 
 首次大约 2~5 分钟，时间基本花在用 apt 装 `python3`（Debian 源慢的时候会到 1 分钟以上）。
 
-> 日志里可能出现 `pull access denied for checkin`，那是 compose 先试着去 Docker Hub 找同名镜像、失败后才本地构建，**不影响结果**，忽略即可。
+> 构建时日志里可能出现 `pull access denied for checkin`，然后紧接着开始编译 —— 那是 compose 先试着去 Docker Hub 找同名镜像、失败后才本地构建，**这种情况不影响结果**，忽略即可。
+> 但如果它出现在最后、`up` 直接失败、没有进入构建，那说明 `build: .` 被注释掉了而 `image: checkin:latest` 还留着，见[常见问题](#faq)。
 
 #### 第二步：第一次打开面板（口令在哪）
 
@@ -357,6 +362,8 @@ BAIDUWP_COOKIE='BAIDUID=xxx; BDUSS=yyy; STOKEN=zzz'
 BILIBILI_COOKIE='SESSDATA=xxx; bili_jct=yyy'
 FNNASCLUB_COOKIE='pvRK_2132_auth=xxx'
 WNFLB_COOKIE='S5r8_2132_auth=xxx; S5r8_2132_saltkey=yyy; S5r8_2132_sid=zzz'
+POJIE_COOKIE='xxx_2132_auth=xxx; xxx_2132_saltkey=yyy'
+KAFAN_COOKIE='xxx_2132_auth=xxx; xxx_2132_saltkey=yyy'
 SMZDM_COOKIE='sess=xxx; __ckguid=yyy'
 TIEBA_COOKIE='BDUSS=xxx; STOKEN=yyy'
 V2EX_COOKIE='A2=xxx; V2EX_LANG=zhcn'
@@ -614,8 +621,23 @@ GLOBAL_PROXY=http://192.168.1.2:7890
 **在设置页改了 cookie，什么时候生效？**
 保存即生效，下一次「立即签到」或定时任务就用新的。如果卡片上显示"环境变量"，说明你还没保存成功，或者保存后该站点被面板接管了 —— 看徽章文案判断。
 
-**日志里出现 `pull access denied for checkin`？**
-compose 先试着去 Docker Hub 拉同名镜像，失败后才用本地构建，不影响结果，忽略即可。
+**`up` 报 `pull access denied for checkin`，或者 `denied: requested access to the resource is denied`？**
+先看是哪种情况：
+
+- **后面紧接着在编译（`[+] Building ...`）** → compose 先试着去 Docker Hub 找同名镜像、失败后才本地构建。属于正常探测，忽略即可。
+- **报完就结束，容器没起来** → 说明 `build: .` 被注释掉了，但 `image: checkin:latest` 还留着。这个 `image` 是本地构建打的标签（没有仓库前缀），compose 只能理解成"去 Docker Hub 拉一个叫 checkin 的镜像"，必然被拒。
+
+`build` 和 `image: checkin:latest` 是**一组**，必须同时存在或同时注释。要用 Actions 构建好的镜像，应该整组换成：
+
+```yaml
+    # build: .
+    # image: checkin:latest
+    image: ghcr.io/<你的用户名>/checkin:latest
+```
+
+改完先 `docker compose config | grep image` 确认最终用的是哪个镜像名，再 `docker compose pull && docker compose up -d`。
+
+如果换成 `ghcr.io/...` 之后报的是 `unauthorized` 或 `manifest unknown`，那是另一个问题：包还是私有的，或者 Actions 还没成功构建过。去 `https://github.com/<你的用户名>?tab=packages` 看包在不在、是不是 Public。
 
 **换了预构建镜像，`up` 报 `No such image: ghcr.io/xxx/checkin:latest`？**
 镜像没拉下来，`up` 就直接去创建容器了。按顺序查：
@@ -659,6 +681,28 @@ docker compose config -q && echo OK
 - **NodeSeek**：cookie 里必须有 `session`。它和 `pjwt` 都是 HttpOnly，`document.cookie` 拿不到，要从 F12 → 网络 → 请求标头 → `Cookie` 整行复制
 - **LinuxDo**：cookie 里必须有 `_t`（Discourse 的登录令牌，同样是 HttpOnly）。**这是"我在电脑上明明登录着、程序却说失效"最常见的原因** —— 从控制台 `document.cookie` 复制出来的 cookie 里根本没有 `_t`。正确姿势：F12 → 网络 → 点任意一个请求 → 请求标头 → 把 `Cookie` 整行复制
 - 改过密码、在别处点过"退出所有设备"，`_t` 都会立即失效，重新登录一次就好
+
+**吾爱破解提示"被瑞数动态防护拦截（WZWS）"？**
+吾爱破解挂的是**瑞数**，不是 Cloudflare，两者完全不是一回事：
+
+| | Cloudflare | 瑞数（WZWS） |
+|---|---|---|
+| 怎么拦 | 看 TLS 指纹 / JA3 | 发一段混淆 JS，让浏览器算出一次性参数 |
+| 怎么过 | 换 `curl_cffi` 指纹就行 | 必须真的执行 JS，再 POST 到 `/waf_zw_verify` 换 cookie |
+| 纯 HTTP 能否解决 | 能 | **不能** |
+
+所以报这个错不是 cookie 写错了。三条路：
+
+1. **临时手动**：浏览器打开 52pojie.cn 逛一圈，立刻复制 Cookie（这次要带上 `WZWSREL` 开头的动态凭证），马上在面板点「立即签到」。凭证几十分钟到几小时就过期，久了必失败。
+2. **每天自动**：只能上真浏览器（Playwright / DrissionPage）。本项目不内置，因为镜像会从 ~90MB 涨到 1GB 以上，NAS 上跑也吃内存。
+3. **放弃这个站**：吾爱破解的价值主要在资源帖，签到收益有限，很多人直接不开。
+
+GitHub 上那些 52pojie 签到脚本（`RoadIsLong/52pojie_Sign`、`jwmycz/py52pojie`）现在基本都失效了，原因就是这个 —— 瑞数一升级，逆向出来的 JS 就作废。
+
+**卡饭论坛的签到为什么显示"登录即自动完成"？**
+卡饭用的是 `dsu_amupper`（打卡机）插件，但它把标准提交模块 `pper` 删掉了，只留了状态页 `pperlist`。也就是说签到动作由插件在你访问论坛时自己完成，脚本能做的只是确认今天签没签。程序会先开首页（触发自动签到），再读状态页确认；状态页说没签才尝试一次标准提交兜底。
+
+另外卡饭整站是 **GBK 编码**，程序里所有解析都显式按 GBK 解码，不用你管，但自己抓包看响应时容易看到乱码，别以为是程序坏了。
 
 **为什么我在电脑上能登录，NAS 上就不行？**
 cookie 本身是对的，但出口 IP 和 TLS 指纹跟浏览器不一样。Cloudflare 校验的是"这三样是不是同一个客户端"，所以换机器 = 换客户端。要么让 NAS 走和浏览器同一个代理出口，要么指望指纹+IP 别太脏。

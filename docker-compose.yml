@@ -8,11 +8,15 @@ services:
 
     # ---- A. 本地构建（默认）----
     #   启动：docker compose up -d --build
+    #   下面两行是一组：build 负责编译，image 只是给编译结果打个标签（没有仓库前缀）
+    #   ⚠ 切到 B 组时必须两行一起注释。只注释 build、留下 image: checkin:latest，
+    #     compose 会去 Docker Hub 拉一个叫 checkin 的镜像 -> pull access denied
     build: .
     image: checkin:latest
 
     # ---- B. 用 GitHub Actions 构建好的镜像（NAS 上不用编译）----
-    #   切换步骤：把上面 A 的 build 和 image 两行注释掉，放开下面一行，然后
+    #   切换步骤：把上面 A 的 build 和 image 两行都注释掉，放开下面一行
+    #       docker compose config | grep image     # 先确认最终用的确实是 ghcr 那个
     #       docker compose pull && docker compose up -d
     # image: ghcr.io/<你的用户名>/checkin:latest
 

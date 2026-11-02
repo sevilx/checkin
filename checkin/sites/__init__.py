@@ -6,8 +6,10 @@ from .baidupan import BaiduPan
 from .bilibili import Bilibili
 from .cloud189 import Cloud189
 from .fnnas import FnNasClub
+from .kafan import Kafan
 from .linuxdo import LinuxDo
 from .nodeseek import NodeSeek
+from .pojie import Pojie
 from .smzdm import Smzdm
 from .tieba import Tieba
 from .v2ex import V2ex
@@ -24,6 +26,8 @@ SITES = [
     Cloud189,
     LinuxDo,
     WnflbForum,
+    Pojie,
+    Kafan,
 ]
 
 BY_KEY = {site.key.lower(): site for site in SITES}
