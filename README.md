@@ -23,9 +23,9 @@
 | NodeSeek | Cookie（`session`） | 随机 / 固定鸡腿（Cloudflare 站点，自动换浏览器指纹） |
 | 天翼云盘 189 | 手机号 + 密码，或 `SSON` | 个人空间签到 + 容量变化（登录成功后会话缓存 6 天） |
 | LinuxDo | Cookie（含 `_t`） | 登录保活 + 浏览任务（该站本身没有签到按钮） |
-| 吾爱破解 | Cookie（含 `_2132_auth`、`_2132_saltkey`） | Discuz 任务系统签到（有瑞数动态防护，见 [FAQ](#faq)） |
-| 卡饭论坛 | Cookie（含 `_2132_auth`、`_2132_saltkey`） | 站点 GBK 编码；签到现在是登录即自动完成，本项做状态确认 |
-| 恩山无线论坛 | Cookie（含 `_2132_auth`、`_2132_saltkey`） | Discuz `erling_qd` 插件签到（要现取 `formhash`，机房 IP 易被 521 拦） |
+| 吾爱破解 | Cookie（含 `htVC_2132_auth`、`htVC_2132_saltkey`、`wzws_cid`） | Discuz 任务系统签到（有瑞数动态防护，见 [FAQ](#faq)） |
+| 卡饭论坛 | Cookie（含 `r6pb_69df_auth`、`r6pb_69df_saltkey`） | 站点 GBK 编码；打卡入口是导航栏图标，提交幂等 |
+| 恩山无线论坛 | Cookie（含 `rHEX_2132_auth`、`rHEX_2132_saltkey`） | Discuz `erling_qd` 插件签到（要现取 `formhash`，机房 IP 易被 521 拦） |
 
 > NodeSeek、LinuxDo、V2EX 都挂在 Cloudflare 后面，**机房 IP 或频繁换 IP 的代理容易被拦成 403**。
 > 程序会用 `curl_cffi` 模仿真实浏览器的 TLS 指纹、并在被拦时自动换几种指纹重试，
@@ -81,9 +81,9 @@ Fork 出来的仓库默认不跑工作流。进 **Actions** 标签，看到提�
 | `NODESEEK_COOKIE` | 至少含 `session`，建议连 `pjwt` 一起 |
 | `NODESEEK_METHOD` | `random`（默认）或 `fixed`，可不填 |
 | `LINUXDO_COOKIE` | 含 `_t`、`_forum_session` |
-| `POJIE_COOKIE` | 吾爱破解 Cookie（含 `_2132_auth`、`_2132_saltkey`） |
-| `KAFAN_COOKIE` | 卡饭论坛 Cookie（含 `_2132_auth`、`_2132_saltkey`） |
-| `ENSHAN_COOKIE` | 恩山无线论坛 Cookie（含 `_2132_auth`、`_2132_saltkey`） |
+| `POJIE_COOKIE` | 吾爱破解 Cookie（含 `htVC_2132_auth`、`htVC_2132_saltkey`） |
+| `KAFAN_COOKIE` | 卡饭论坛 Cookie（含 `r6pb_69df_auth`、`r6pb_69df_saltkey`） |
+| `ENSHAN_COOKIE` | 恩山无线论坛 Cookie（含 `rHEX_2132_auth`、`rHEX_2132_saltkey`） |
 | `TY189_USERNAME` / `TY189_PASSWORD` | 天翼账号 + 密码 |
 | 推送渠道 | 见[推送通知](#推送通知)，至少配一组，不配就只写日志 |
 
@@ -397,8 +397,8 @@ BAIDUWP_COOKIE='BAIDUID=xxx; BDUSS=yyy; STOKEN=zzz'
 BILIBILI_COOKIE='SESSDATA=xxx; bili_jct=yyy'
 FNNASCLUB_COOKIE='pvRK_2132_auth=xxx'
 WNFLB_COOKIE='S5r8_2132_auth=xxx; S5r8_2132_saltkey=yyy; S5r8_2132_sid=zzz'
-POJIE_COOKIE='xxx_2132_auth=xxx; xxx_2132_saltkey=yyy'
-KAFAN_COOKIE='xxx_2132_auth=xxx; xxx_2132_saltkey=yyy'
+POJIE_COOKIE='htVC_2132_auth=xxx; htVC_2132_saltkey=yyy; wzws_cid=zzz'
+KAFAN_COOKIE='r6pb_69df_auth=xxx; r6pb_69df_saltkey=yyy'
 SMZDM_COOKIE='sess=xxx; __ckguid=yyy'
 TIEBA_COOKIE='BDUSS=xxx; STOKEN=yyy'
 V2EX_COOKIE='A2=xxx; V2EX_LANG=zhcn'
@@ -726,16 +726,38 @@ docker compose config -q && echo OK
 | 怎么过 | 换 `curl_cffi` 指纹就行 | 必须真的执行 JS，再 POST 到 `/waf_zw_verify` 换 cookie |
 | 纯 HTTP 能否解决 | 能 | **不能** |
 
-所以报这个错不是 cookie 写错了。三条路：
+所以报这个错不是 cookie 写错了，是**瑞数凭证过期**。看清楚一点：
 
-1. **临时手动**：浏览器打开 52pojie.cn 逛一圈，立刻复制 Cookie（这次要带上 `WZWSREL` 开头的动态凭证），马上在面板点「立即签到」。凭证几十分钟到几小时就过期，久了必失败。
-2. **每天自动**：只能上真浏览器（Playwright / DrissionPage）。本项目不内置，因为镜像会从 ~90MB 涨到 1GB 以上，NAS 上跑也吃内存。
+* Discuz 的登录票据（`xxx_2132_auth` / `xxx_69df_auth`）能撑好几天
+* 瑞数的凭证（`wzws_cid` / `wzws_sid`）通常只有几十分钟
+
+所以会出现「面板检测说 Cookie 有效，一签到就被拦」这种别扭现象 —— 登录是好的，过不了瑞数而已。
+
+程序会分两种说法告诉你到底哪种情况：cookie 里**带了** `wzws_cid` 还被拦，就是过期了；**完全没带**，就是同步时浏览器里吾爱不是活跃会话。
+
+三条路：
+
+1. **手动刷一次（最快）**：浏览器打开 https://www.52pojie.cn/ 任意页面，**等论坛首页真正显示出来**（不是转圈的验证页），然后 60 秒内运行
+   ```
+   python tools\sync_cookies.py --sites pojie
+   ```
+   再回面板点「立即签到」。凭证只有几十分钟寿命，所以动作要连着做。
+2. **定时同步（推荐）**：让计划任务每 20 分钟自动同步一次，你只要平时浏览器开着吾爱，凭证就一直是新的。口令用 `--remember` 存一次，之后不需要交互：
+   ```bat
+   schtasks /create /tn "checkin-cookie-sync" /sc minute /mo 20 ^
+     /tr "python C://path//to//checkin-hub//tools//sync_cookies.py --nas http://192.168.99.130:8181 --sites pojie,kafan,wnflb"
+   ```
 3. **放弃这个站**：吾爱破解的价值主要在资源帖，签到收益有限，很多人直接不开。
 
-GitHub 上那些 52pojie 签到脚本（`RoadIsLong/52pojie_Sign`、`jwmycz/py52pojie`）现在基本都失效了，原因就是这个 —— 瑞数一升级，逆向出来的 JS 就作废。
+**别再试 Playwright 之外的花样了** —— 我实测过：`requests` 和 `curl_cffi`（safari17 指纹）各请求 3 次，**6 次全部被拦**。瑞数不看 TLS 指纹，它就是要求真的执行那段混淆 JS。GitHub 上那些脚本（`RoadIsLong/52pojie_Sign`、`jwmycz/py52pojie`）现在基本都失效，也是这个原因。
 
-**卡饭论坛的签到为什么显示"登录即自动完成"？**
-卡饭用的是 `dsu_amupper`（打卡机）插件，但它把标准提交模块 `pper` 删掉了，只留了状态页 `pperlist`。也就是说签到动作由插件在你访问论坛时自己完成，脚本能做的只是确认今天签没签。程序会先开首页（触发自动签到），再读状态页确认；状态页说没签才尝试一次标准提交兜底。
+**卡饭论坛的签到入口在哪？为什么找不到"签到"两个字？**
+卡饭用的是 `dsu_amupper`（打卡机）插件，它把打卡按钮做成了**图片**（`dk.png`），所以整页搜不到"签到"这两个中文字 —— 早期版本靠中文关键词判断状态，结果全落空。
+
+真实结构是导航栏里一个 `<a id="pper_a">`，链接形如
+`plugin.php?id=dsu_amupper&ppersubmit=true&formhash=xxx`（**注意没有 `:pper`**，带那个会报"模块文件不存在"）。程序从首页原样取这个链接提交，提交是幂等的：今天签过就返回"您已签到完毕，今日已无需再次签到"。
+
+状态标记是 `pper_b`（"已完成"图标）。签过卡之后服务端直接不渲染它，所以"首页有没有 `pper_b`"也能反推状态，但程序最终以提交后的响应为准，比猜按钮可靠。
 
 另外卡饭整站是 **GBK 编码**，程序里所有解析都显式按 GBK 解码，不用你管，但自己抓包看响应时容易看到乱码，别以为是程序坏了。
 

@@ -316,11 +316,23 @@ def build_settings_payload() -> dict:
             }
         )
 
-    site_proxies = {}
+    # 每个站点最终用哪层代理，以及它从哪来 —— 前端要把"生效来源"显示出来，
+    # 否则用户改完不知道到底有没有起作用（面板设置会盖过 .env）。
+    site_proxies: dict[str, str] = {}
+    site_origins: dict[str, str] = {}
+    has_global = bool(cfgstore.global_proxy() or os.environ.get("GLOBAL_PROXY", "").strip())
     for site_cls in SITES:
-        site_proxies[site_cls.key] = cfgstore.site_proxy(site_cls.key) or os.environ.get(
-            f"{site_cls.key}_PROXY", ""
-        )
+        panel_value = cfgstore.site_proxy(site_cls.key)
+        env_value = os.environ.get(f"{site_cls.key}_PROXY", "").strip()
+        site_proxies[site_cls.key] = panel_value or env_value
+        if panel_value:
+            site_origins[site_cls.key] = "panel"
+        elif env_value:
+            site_origins[site_cls.key] = "env"
+        elif has_global:
+            site_origins[site_cls.key] = "global"
+        else:
+            site_origins[site_cls.key] = "none"
 
     return {
         "title": PANEL_TITLE,
@@ -331,6 +343,7 @@ def build_settings_payload() -> dict:
             "global": cfgstore.global_proxy(),
             "global_env": os.environ.get("GLOBAL_PROXY", ""),
             "sites": site_proxies,
+            "origins": site_origins,
         },
         "password": {"source": password_source()},
         "schedule": schedule_payload(),

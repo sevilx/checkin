@@ -18,6 +18,7 @@ import re
 import time
 from urllib.parse import urljoin
 
+from .. import discuz
 from ..core import Line, NAV_HEADERS, Site, looks_blocked
 
 BASE = "https://www.wnflb2023.com"
@@ -31,10 +32,10 @@ PLAIN_FORMHASH = re.compile(r"formhash=([0-9a-fA-F]{8,})")
 
 # Discuz 提示块：登录失效、已签到、签到成功都走这里
 MESSAGE_BOX = re.compile(r'id="messagetext"[^>]*>(.*?)</div>', re.S)
-# 登录态标记：只有登录后才会渲染 <a class="vwmy">用户名</a>
-NICK = re.compile(r'class="vwmy"[^>]*>([^<]{1,40})<')
-
-LOGIN_HINTS = ("尚未登录", "请先登录", "需要登录", "登录后才能", "先登录")
+SCRIPT_STYLE = re.compile(r"<(script|style)[^>]*>.*?</\1>", re.S | re.I)
+# 登录态判断统一走 checkin.discuz：福利吧的用户名藏在 <strong class="vwmy"><a>名字</a></strong>
+# 的子元素里，本文件原来的 NICK 正则要求 vwmy 后紧跟文本，会把有效 cookie 判成失效。
+LOGIN_HINTS = discuz.GUEST_HINTS
 DONE_HINTS = ("已经签到", "已签到", "签到过了", "已打过卡", "今日已签到")
 OK_HINTS = ("签到成功", "签到完成", "已成功签到", "签到获得", "获得奖励")
 
@@ -54,7 +55,7 @@ class WnflbForum(Site):
     fields = ("cookie",)
     doc = (
         "登录 wnflb2023.com → F12 → 网络 → 任意请求 → 请求标头里的 Cookie 整行复制"
-        "（要含以 _2132_auth 和 _2132_saltkey 结尾的两条）"
+        "（要含以 _auth 和 _saltkey 结尾的两条）"
     )
 
     # ------------------------------------------------------------------ #
@@ -90,16 +91,12 @@ class WnflbForum(Site):
         self._check(page, "打开论坛首页")
 
         html = page.text or ""
-        nick = NICK.search(html)
-        if not nick:
-            if any(hint in html for hint in LOGIN_HINTS):
-                raise RuntimeError(
-                    "Cookie 已失效（首页没有登录态）。重新登录后复制整段 Cookie，"
-                    "要含以 _2132_auth、_2132_saltkey 结尾的那两条（Discuz 的登录票据）"
-                )
-            raise RuntimeError("首页没找到登录标记，Cookie 不完整或站点改版了")
+        ok, why = discuz.login_verdict(html, "福利吧")
+        if not ok:
+            raise RuntimeError(why)
 
-        lines: list[Line] = [Line("账号", nick.group(1).strip())]
+        who = discuz.nickname(html)
+        lines: list[Line] = [Line("账号", who)] if who else []
 
         url = self._checkin_url(html)
         resp = self._get(session, url, headers={"Referer": FORUM})
@@ -107,7 +104,7 @@ class WnflbForum(Site):
 
         state, message, raw = self._classify(resp.text or "")
         if state == "login":
-            raise RuntimeError(f"签到被拒：{message} —— Cookie 已失效，重新复制一次")
+            raise RuntimeError(f"签到被拒：{message} —— Cookie 已失效，{discuz.cookie_hint('福利吧')}")
         if state == "unknown":
             snippet = re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", raw)).strip()[:160]
             raise RuntimeError(
@@ -156,10 +153,16 @@ class WnflbForum(Site):
     # ------------------------------------------------------------------ #
     @staticmethod
     def _message_text(html: str) -> str:
+        """取 Discuz 提示块正文，顺手去掉内联 script/style。
+
+        插件会在提示块里塞一段自动跳转的 JS，不清理的话日志会变成
+        「您今日已签到，无需重复签到！ if(history.length > ...) document.write(...)」。
+        """
         box = MESSAGE_BOX.search(html)
         if not box:
             return ""
-        return re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", box.group(1))).strip()
+        raw = SCRIPT_STYLE.sub(" ", box.group(1))
+        return re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", raw)).strip()
 
     def _classify(self, html: str) -> tuple[str, str, str]:
         """返回 (状态, 提示语, 原始 html)。状态：ok / done / login / unknown。"""
@@ -186,7 +189,7 @@ class WnflbForum(Site):
 
     # ------------------------------------------------------------------ #
     def verify(self) -> tuple[bool, str]:
-        """只读检测：首页能拿到用户名就说明 cookie 有效。"""
+        """只读检测：首页有退出链接就说明 cookie 有效。"""
         session = self.session(headers={**NAV_HEADERS, "Referer": FORUM})
         try:
             resp = self._get(session, FORUM)
@@ -196,7 +199,4 @@ class WnflbForum(Site):
             return False, f"被防火墙拦截（HTTP {resp.status_code}）"
         if resp.status_code != 200:
             return False, f"检测失败：HTTP {resp.status_code}"
-        nick = NICK.search(resp.text or "")
-        if nick:
-            return True, f"Cookie 有效：{nick.group(1).strip()}"
-        return False, "Cookie 已失效（首页没有登录态）"
+        return discuz.login_verdict(resp.text or "", "福利吧")

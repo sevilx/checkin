@@ -23,7 +23,7 @@
 | --- | --- | --- |
 | LinuxDo | `_t` | 是 |
 | NodeSeek | `session` | 是 |
-| 52pojie / 卡饭 / 福利吧 | `xxxx_2132_auth` | 是 |
+| 52pojie（`htVC_2132_auth`）/ 卡饭（`r6pb_69df_auth`）/ 福利吧（`S5r8_2132_auth`） | 各站前缀不同，认 `_auth` 后缀 | 是 |
 | V2EX | `A2` | 是 |
 
 从 `document.cookie` 拿到的是一份"看着有、实际登不进去"的残缺 cookie，
@@ -155,6 +155,28 @@ schtasks /Create /TN "checkin-cookie-sync" /SC DAILY /ST 08:50 ^
 
 一个现实的限制：**如果你一整天没开浏览器，cookie 也可能过期**。
 好在服务端通常会滑动续期 —— 只要隔天打开一次这些站，有效期就一直往后滚。
+
+### 吾爱破解：只有高频同步才救得回来
+
+52pojie 的瑞数凭证（`wzws_cid`）**几十分钟就失效**，比 Discuz 的登录票据短两个数量级。
+所以它不能靠"每天同步一次"，得改成时常刷：
+
+```cmd
+schtasks /Create /TN "checkin-cookie-sync" /SC MINUTE /MO 20 ^
+  /TR "python C://path//to//checkin-hub//tools//sync_cookies.py --nas http://192.168.1.10:8181 --sites pojie"
+```
+
+配一次 `--remember` 存好口令，之后这个任务全程不用交互：
+
+```cmd
+python tools\sync_cookies.py --nas http://192.168.1.10:8181 --remember
+```
+
+前提是**你平时会开浏览器逛吾爱**。Firefox 只有在真正访问站点时才会重新计算挑战、
+刷新 `wzws_cid`；后台挂着不访问，cookie 库里的凭证一样是旧的。
+
+判断有没有效，看面板「设置」页的 Cookie 同步卡片：`POJIE` 那行的时间戳如果一直停在几小时前，
+说明浏览器没再访问过吾爱，同步推上去的自然是旧凭证。
 
 ---
 

@@ -31,6 +31,7 @@ from __future__ import annotations
 import json
 import re
 
+from .. import discuz
 from ..core import Line, NAV_HEADERS, Site, XHR_HEADERS, looks_blocked
 
 HOST = "https://www.right.com.cn"
@@ -170,7 +171,7 @@ class EnShan(Site):
             raise RuntimeError(f"打开论坛首页失败 HTTP {page.status_code}")
 
         logged_in, formhash = self._login_state(html)
-        nick = NICK.search(html)
+        who = discuz.nickname(html)
 
         if not logged_in:
             lowered = html.lower()
@@ -182,12 +183,10 @@ class EnShan(Site):
                 )
             if any(hint in html for hint in LOGIN_HINTS):
                 raise RuntimeError(
-                    "Cookie 已失效（首页是游客态）。重新登录后复制整段 Cookie，"
-                    "要含以 _2132_auth、_2132_saltkey 结尾的那两条"
+                    f"Cookie 已失效（首页是游客态）。{discuz.cookie_hint('恩山')}"
                 )
             raise RuntimeError(
-                "Cookie 已失效或不完整：首页没有登录态（既没有退出链接，也没有用户名）。"
-                "F12 → 网络 → 请求标头，复制整段 Cookie，要含 _2132_auth 和 _2132_saltkey"
+                f"Cookie 已失效或不完整：首页没有登录态。{discuz.cookie_hint('恩山')}"
             )
 
         if not formhash:
@@ -197,8 +196,8 @@ class EnShan(Site):
             )
 
         lines: list[Line] = []
-        if nick:
-            lines.append(Line("账号", nick.group(1).strip()))
+        if who:
+            lines.append(Line("账号", who))
         else:
             lines.append(Line("登录态", f"已登录（formhash {formhash[:2]}**）"))
 
@@ -316,6 +315,5 @@ class EnShan(Site):
 
         logged_in, _ = self._login_state(html)
         if logged_in:
-            nick = NICK.search(html)
-            return True, f"Cookie 有效：{nick.group(1).strip() if nick else '已登录'}"
+            return True, f"Cookie 有效：{discuz.nickname(html) or '已登录'}"
         return False, "Cookie 已失效（首页是游客态）"

@@ -104,7 +104,10 @@
   .res.ok { color: var(--ok); } .res.bad { color: var(--bad); }
   .res.unknown, .res.unsupported { color: var(--warn); }
   .row-actions { display: flex; gap: 8px; margin-top: 14px; flex-wrap: wrap; }
-  .grid2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 10px; }
+  .grid2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 10px; }
+  /* 代理卡片：站点名和「用全局/来自 .env」标记别换行，否则会挤成两行 */
+  #proxySites > .f > span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  #proxySites .meta { font-size: 11px; }
   .toast {
     position: fixed; left: 50%; bottom: 28px; transform: translate(-50%, 20px);
     background: var(--text); color: var(--bg); padding: 9px 16px; border-radius: 999px;
@@ -302,16 +305,26 @@
   }
 
   // ---------------- 代理 ----------------
+  var PROXY_ORIGIN = { panel: '面板', env: '环境变量', global: '全局', none: '直连' };
+
   function renderProxies(proxy) {
     $('#proxyGlobal').value = proxy.global || '';
     if (!proxy.global && proxy.global_env) {
       $('#proxyGlobal').placeholder = '来自 .env：' + proxy.global_env + '（留空则继续用它）';
     }
     var keys = (DATA.sites || []).map(function (s) { return s.key; });
+    var origins = proxy.origins || {};
     $('#proxySites').innerHTML = keys.map(function (key) {
       var value = (proxy.sites || {})[key] || '';
-      return '<label class="f" style="margin-top:0"><span>' + esc(key) + '</span>' +
-        '<input class="psite" data-key="' + esc(key) + '" value="' + esc(value) + '" placeholder="留空=用全局"></label>';
+      var origin = origins[key] || 'none';
+      // 明确告诉用户这一站现在到底走不走代理、值是哪一层给的
+      var tag = origin === 'panel' ? '已设' :
+                (origin === 'env' ? 'env' :
+                (origin === 'global' ? '全局' : '直连'));
+      return '<label class="f" style="margin-top:0"><span>' + esc(key) +
+        ' <span class="meta">' + esc(tag) + '</span></span>' +
+        '<input class="psite" data-key="' + esc(key) + '" value="' + esc(value) +
+        '" placeholder="留空=用全局"></label>';
     }).join('');
   }
 
