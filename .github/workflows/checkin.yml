@@ -52,6 +52,7 @@ jobs:
           WNFLB_COOKIE: ${{ secrets.WNFLB_COOKIE }}
           POJIE_COOKIE: ${{ secrets.POJIE_COOKIE }}
           KAFAN_COOKIE: ${{ secrets.KAFAN_COOKIE }}
+          ENSHAN_COOKIE: ${{ secrets.ENSHAN_COOKIE }}
           SMZDM_COOKIE: ${{ secrets.SMZDM_COOKIE }}
           TIEBA_COOKIE: ${{ secrets.TIEBA_COOKIE }}
           V2EX_COOKIE: ${{ secrets.V2EX_COOKIE }}

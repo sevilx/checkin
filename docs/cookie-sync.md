@@ -185,7 +185,7 @@ Stagehand 是 Browserbase 做的开源框架，卖点是"用自然语言操作�
 
 | 方案 | 额外体积 | 能过瑞数 | 适配成本 | 适合这里吗 |
 | --- | --- | --- | --- | --- |
-| `requests` / `curl_cffi` | ~10 MB | 否 | 已做好 | **默认方案**，12 个站点里 11 个够用 |
+| `requests` / `curl_cffi` | ~10 MB | 否 | 已做好 | **默认方案**，13 个站点里 12 个够用 |
 | `jsdom` / QuickJS 跑挑战脚本 | ~50 MB | 基本不能 | 极高 | 瑞数会检测 canvas、时序、DOM 特征，脚本每年变 |
 | Lightpanda（Zig） | 37 MB | **否** | 中 | 见下 |
 | Obscura（Rust） | 40 MB | 大概率不行 | 中 | 见下 |

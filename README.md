@@ -5,7 +5,7 @@
 - **GitHub Actions**：不用服务器，Fork 一份、填几个 Secret，每天定时跑完给你发通知
 - **NAS / Docker**：容器里常驻，带网页面板，能看每个站点的结果和历史，还能点一下手动签到
 
-支持 12 个站点，核心只依赖 `requests`（`curl_cffi` 为可选，用来过 Cloudflare），浏览器面板用 Python 标准库实现，不装任何 Web 框架。
+支持 13 个站点，核心只依赖 `requests`（`curl_cffi` 为可选，用来过 Cloudflare），浏览器面板用 Python 标准库实现，不装任何 Web 框架。
 
 ---
 
@@ -25,6 +25,7 @@
 | LinuxDo | Cookie（含 `_t`） | 登录保活 + 浏览任务（该站本身没有签到按钮） |
 | 吾爱破解 | Cookie（含 `_2132_auth`、`_2132_saltkey`） | Discuz 任务系统签到（有瑞数动态防护，见 [FAQ](#faq)） |
 | 卡饭论坛 | Cookie（含 `_2132_auth`、`_2132_saltkey`） | 站点 GBK 编码；签到现在是登录即自动完成，本项做状态确认 |
+| 恩山无线论坛 | Cookie（含 `_2132_auth`、`_2132_saltkey`） | Discuz `erling_qd` 插件签到（要现取 `formhash`，机房 IP 易被 521 拦） |
 
 > NodeSeek、LinuxDo、V2EX 都挂在 Cloudflare 后面，**机房 IP 或频繁换 IP 的代理容易被拦成 403**。
 > 程序会用 `curl_cffi` 模仿真实浏览器的 TLS 指纹、并在被拦时自动换几种指纹重试，
@@ -82,6 +83,7 @@ Fork 出来的仓库默认不跑工作流。进 **Actions** 标签，看到提�
 | `LINUXDO_COOKIE` | 含 `_t`、`_forum_session` |
 | `POJIE_COOKIE` | 吾爱破解 Cookie（含 `_2132_auth`、`_2132_saltkey`） |
 | `KAFAN_COOKIE` | 卡饭论坛 Cookie（含 `_2132_auth`、`_2132_saltkey`） |
+| `ENSHAN_COOKIE` | 恩山无线论坛 Cookie（含 `_2132_auth`、`_2132_saltkey`） |
 | `TY189_USERNAME` / `TY189_PASSWORD` | 天翼账号 + 密码 |
 | 推送渠道 | 见[推送通知](#推送通知)，至少配一组，不配就只写日志 |
 
@@ -736,6 +738,15 @@ GitHub 上那些 52pojie 签到脚本（`RoadIsLong/52pojie_Sign`、`jwmycz/py52
 卡饭用的是 `dsu_amupper`（打卡机）插件，但它把标准提交模块 `pper` 删掉了，只留了状态页 `pperlist`。也就是说签到动作由插件在你访问论坛时自己完成，脚本能做的只是确认今天签没签。程序会先开首页（触发自动签到），再读状态页确认；状态页说没签才尝试一次标准提交兜底。
 
 另外卡饭整站是 **GBK 编码**，程序里所有解析都显式按 GBK 解码，不用你管，但自己抓包看响应时容易看到乱码，别以为是程序坏了。
+
+**恩山无线论坛报 HTTP 521 / 520，或者提示"请求含有非法字符"？**
+
+两种完全不同的原因：
+
+- **521 / 520 / 522**：恩山挂在阿里云 ESA 后面，**对机房 IP 很不友好**。GitHub Actions 的出口 IP 基本都会被拦，家里 NAS 的宽带 IP 反而正常。所以这站建议只在本机/NAS 上跑，Actions 上失败是预期行为，不是你配错了。
+- **"您当前的访问请求当中含有非法字符"**：这是 Discuz 的表单串校验失败（`request_tainting`），不是站点故障。恩山的签到接口必须带**当前会话的 `formhash`**，随便编一个就会吃这个 503。程序会先从首页现取 `formhash` 再提交；如果还是报这个，说明 cookie 里的登录票据已经过期、服务端换了会话，重新复制一次 Cookie 即可。
+
+恩山那个签到是 `erling_qd`（二灵签到）插件，接口返回 JSON（`success` / `message` / `continuous_days`），所以日志里能直接看到连续签到天数。
 
 **为什么我在电脑上能登录，NAS 上就不行？**
 cookie 本身是对的，但出口 IP 和 TLS 指纹跟浏览器不一样。Cloudflare 校验的是"这三样是不是同一个客户端"，所以换机器 = 换客户端。要么让 NAS 走和浏览器同一个代理出口，要么指望指纹+IP 别太脏。
