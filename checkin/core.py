@@ -318,6 +318,14 @@ class Site:
         raise RuntimeError("请求失败")
 
     def cf_hint(self, blocked: list[tuple[str, int]]) -> str:
+        codes = {code for _, code in blocked}
+        if codes == {429}:
+            return (
+                "被限流了（每种浏览器指纹都是 HTTP 429）。这不是 cookie 失效，一般也不是封号：\n"
+                "1) 短时间内请求太密 —— 隔 1~2 分钟再跑一次；\n"
+                "2) 同一个出口 IP 上还有别的程序在打这个站（NAS 上的旧容器、别的签到脚本），换代理或停掉；\n"
+                "3) 登录 / 浏览频率过高同样会触发，把执行时间隔开一点。"
+            )
         tried = "、".join(f"{name}→HTTP {code}" for name, code in blocked)
         missing = (
             "\n当前环境没装 curl_cffi，只能用 requests 的默认 TLS 指纹，Cloudflare 一眼就能认出来；"

@@ -32,8 +32,9 @@ from ..core import Line, Site, XHR_HEADERS, parse_cookie
 BASE = "https://linux.do"
 MAX_BROWSE = 10
 MAX_LIKE = 5
-# 低于这个耗时的主题不报：几百毫秒的 GET 谈不上"读了"，报了也只是刷数
-MIN_REPORT_MS = 1500
+# 低于这个耗时的主题不报。实测家宽 + 代理拉一个主题 json 约 0.5~1 秒，
+# 门槛设太高一整天都不会触发（开关就白开了），所以按"确实花掉了这些时间"取 400ms。
+MIN_REPORT_MS = 400
 
 
 def _int(value, default: int = 0, lo: int = 0, hi: int = 0) -> int:
@@ -347,13 +348,27 @@ class LinuxDo(Site):
 
     # ------------------------------------------------------------------ #
     def _stats_lines(self, session, headers, username: str) -> list[Line]:
-        """真实统计。拿不到就返回空列表，不影响签到结论。"""
+        """真实统计。拿不到就返回空列表，不影响签到结论。
+
+        数据在 `/u/<用户名>/summary.json` 的 `user_summary` 里。
+        注意 `/u/<用户名>.json` 的 `user_stat` 在 linux.do 上是 **null**，
+        只有一个空的 user 对象，所以那个接口只能当兜底（别的 Discourse 实例会用）。
+        """
+        stat: dict = {}
         try:
-            resp = session.get(f"{BASE}/u/{username}.json", timeout=25)
-            if resp.status_code != 200:
-                return []
-            stat = ((resp.json() or {}).get("user") or {}).get("user_stat") or {}
+            resp = session.get(f"{BASE}/u/{username}/summary.json", timeout=25)
+            if resp.status_code == 200:
+                stat = (resp.json() or {}).get("user_summary") or {}
         except Exception:  # noqa: BLE001
+            stat = {}
+        if not stat:
+            try:
+                resp = session.get(f"{BASE}/u/{username}.json", timeout=25)
+                if resp.status_code == 200:
+                    stat = ((resp.json() or {}).get("user") or {}).get("user_stat") or {}
+            except Exception:  # noqa: BLE001
+                stat = {}
+        if not stat:
             return []
 
         out: list[Line] = []
