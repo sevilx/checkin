@@ -53,6 +53,9 @@ jobs:
           POJIE_COOKIE: ${{ secrets.POJIE_COOKIE }}
           KAFAN_COOKIE: ${{ secrets.KAFAN_COOKIE }}
           ENSHAN_COOKIE: ${{ secrets.ENSHAN_COOKIE }}
+          PAN946_EMAIL: ${{ secrets.PAN946_EMAIL }}
+          PAN946_PASSWORD: ${{ secrets.PAN946_PASSWORD }}
+          PAN946_COOKIE: ${{ secrets.PAN946_COOKIE }}
           SMZDM_COOKIE: ${{ secrets.SMZDM_COOKIE }}
           TIEBA_COOKIE: ${{ secrets.TIEBA_COOKIE }}
           V2EX_COOKIE: ${{ secrets.V2EX_COOKIE }}

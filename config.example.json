@@ -6,6 +6,7 @@
   "_pojie_说明": "52pojie 有瑞数动态防护，cookie 里的 WZWS 凭证几小时就过期，纯 HTTP 常被拦；建议浏览器访问后立刻跑，长期无人值守需要真浏览器方案",
   "_kafan_说明": "卡饭是 GBK 站点，签到为登录即自动完成，本项主要确认今天签没签",
   "_enshan_说明": "恩山是 Discuz X3.5 + erling_qd 插件，签到要带页面里的 formhash；机房 IP 常被 WAF 拦（521），建议在家宽 NAS 上跑",
+  "_pan946_说明": "盘就是六是 Xiuno BBS，签到接口是 POST my-sign.htm（空 body 返回 JSON）。填 email + password 即可每天自动登录，不用同步 cookie；只填 cookie 也能用，但会随着登录票据过期而失效",
   "BAIDUWP": [],
   "BILIBILI": [],
   "FNNASCLUB": [],
@@ -13,6 +14,13 @@
   "POJIE": [],
   "KAFAN": [],
   "ENSHAN": [],
+  "PAN946": [
+    {
+      "email": "",
+      "password": "",
+      "cookie": ""
+    }
+  ],
   "SMZDM": [],
   "TIEBA": [],
   "V2EX": [

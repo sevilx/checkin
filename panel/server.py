@@ -392,6 +392,10 @@ def save_site_accounts(key: str, incoming: list) -> tuple[bool, str]:
             return False, f"{site_cls.name} 缺少必填字段：{'、'.join(missing)}"
         if site_cls.key == "V2EX" and not (account.get("cookie") or account.get("a2")):
             return False, "V2EX 需要 cookie 或 a2 之一"
+        if site_cls.key == "PAN946" and not (
+            account.get("cookie") or (account.get("email") and account.get("password"))
+        ):
+            return False, "盘就是六需要 cookie，或者邮箱 + 密码（二选一）"
         merged.append(account)
 
     cfgstore.set_site(site_cls.key, merged)

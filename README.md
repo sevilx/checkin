@@ -26,6 +26,7 @@
 | 吾爱破解 | Cookie（含 `htVC_2132_auth`、`htVC_2132_saltkey`、`wzws_cid`） | Discuz 任务系统签到（有瑞数动态防护，见 [FAQ](#faq)） |
 | 卡饭论坛 | Cookie（含 `r6pb_69df_auth`、`r6pb_69df_saltkey`） | 站点 GBK 编码；打卡入口是导航栏图标，提交幂等 |
 | 恩山无线论坛 | Cookie（含 `rHEX_2132_auth`、`rHEX_2132_saltkey`） | Discuz `erling_qd` 插件签到（要现取 `formhash`，机房 IP 易被 521 拦） |
+| 盘就是六 | 邮箱 + 密码，或 Cookie（`bbs_uid`、`bbs_token`） | Xiuno BBS，`POST my-sign.htm` 签到；支持账号密码每日自动登录，不用同步 cookie |
 
 > NodeSeek、LinuxDo、V2EX 都挂在 Cloudflare 后面，**机房 IP 或频繁换 IP 的代理容易被拦成 403**。
 > 程序会用 `curl_cffi` 模仿真实浏览器的 TLS 指纹、并在被拦时自动换几种指纹重试，
@@ -84,6 +85,8 @@ Fork 出来的仓库默认不跑工作流。进 **Actions** 标签，看到提�
 | `POJIE_COOKIE` | 吾爱破解 Cookie（含 `htVC_2132_auth`、`htVC_2132_saltkey`） |
 | `KAFAN_COOKIE` | 卡饭论坛 Cookie（含 `r6pb_69df_auth`、`r6pb_69df_saltkey`） |
 | `ENSHAN_COOKIE` | 恩山无线论坛 Cookie（含 `rHEX_2132_auth`、`rHEX_2132_saltkey`） |
+| `PAN946_EMAIL` / `PAN946_PASSWORD` | 盘就是六的登录邮箱 + 密码（推荐，每天自动登录，不会过期） |
+| `PAN946_COOKIE` | 盘就是六 Cookie（含 `bbs_uid`、`bbs_token`），不想填密码时用 |
 | `TY189_USERNAME` / `TY189_PASSWORD` | 天翼账号 + 密码 |
 | 推送渠道 | 见[推送通知](#推送通知)，至少配一组，不配就只写日志 |
 
@@ -407,6 +410,8 @@ NODESEEK_METHOD=fixed
 LINUXDO_COOKIE='_t=xxx; _forum_session=yyy'
 TY189_USERNAME=13800000000
 TY189_PASSWORD='你的密码'
+PAN946_EMAIL='you@example.com'
+PAN946_PASSWORD='你的密码'
 ```
 
 > **cookie 一律用单引号包住，不要用双引号。**

@@ -9,6 +9,7 @@ from .fnnas import FnNasClub
 from .kafan import Kafan
 from .linuxdo import LinuxDo
 from .nodeseek import NodeSeek
+from .pan946 import Pan946
 from .pojie import Pojie
 from .right import EnShan
 from .smzdm import Smzdm
@@ -30,6 +31,7 @@ SITES = [
     Pojie,
     Kafan,
     EnShan,
+    Pan946,
 ]
 
 BY_KEY = {site.key.lower(): site for site in SITES}
