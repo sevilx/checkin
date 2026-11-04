@@ -22,7 +22,7 @@
 | V2EX | Cookie 或 `A2` | `/mission/daily` 领每日登录奖励（已领过算成功，不报错） |
 | NodeSeek | Cookie（`session`） | 随机 / 固定鸡腿（Cloudflare 站点，自动换浏览器指纹） |
 | 天翼云盘 189 | 手机号 + 密码，或 `SSON` | 个人空间签到 + 容量变化（登录成功后会话缓存 6 天） |
-| LinuxDo | Cookie（含 `_t`） | 登录保活 + 浏览任务（该站本身没有签到按钮） |
+| LinuxDo | Cookie（含 `_t`） | 登录保活 + 真实统计（阅读时长 / 已读帖数 / 获赞），可选阅读上报与点赞（默认关） |
 | 吾爱破解 | Cookie（含 `htVC_2132_auth`、`htVC_2132_saltkey`、`wzws_cid`） | Discuz 任务系统签到（有瑞数动态防护，见 [FAQ](#faq)） |
 | 卡饭论坛 | Cookie（含 `r6pb_69df_auth`、`r6pb_69df_saltkey`） | 站点 GBK 编码；打卡入口是导航栏图标，提交幂等 |
 | 恩山无线论坛 | Cookie（含 `rHEX_2132_auth`、`rHEX_2132_saltkey`） | Discuz `erling_qd` 插件签到（要现取 `formhash`，机房 IP 易被 521 拦） |
@@ -82,6 +82,9 @@ Fork 出来的仓库默认不跑工作流。进 **Actions** 标签，看到提�
 | `NODESEEK_COOKIE` | 至少含 `session`，建议连 `pjwt` 一起 |
 | `NODESEEK_METHOD` | `random`（默认）或 `fixed`，可不填 |
 | `LINUXDO_COOKIE` | 含 `_t`、`_forum_session` |
+| `LINUXDO_BROWSE` | 浏览主题数，默认 3，上限 10 |
+| `LINUXDO_READ_REPORT` | 设 `1` 才上报阅读时长（默认关，见[阅读上报](#linuxdo-的阅读上报和点赞)） |
+| `LINUXDO_LIKE` | 点赞配额，默认 0（关），上限 5 |
 | `POJIE_COOKIE` | 吾爱破解 Cookie（含 `htVC_2132_auth`、`htVC_2132_saltkey`） |
 | `KAFAN_COOKIE` | 卡饭论坛 Cookie（含 `r6pb_69df_auth`、`r6pb_69df_saltkey`） |
 | `ENSHAN_COOKIE` | 恩山无线论坛 Cookie（含 `rHEX_2132_auth`、`rHEX_2132_saltkey`） |
@@ -782,7 +785,27 @@ cookie 本身是对的，但出口 IP 和 TLS 指纹跟浏览器不一样。Clou
 不是，那是成功。V2EX 的签到就是 `/mission/daily` 页上的「领取铜币」，当天领过之后页面只剩一句「每日登录奖励已领取」。旧版本会把这种状态当成失败，现在算成功。
 
 **LinuxDo 为什么没有"签到成功"？**
-linux.do 是 Discourse 论坛，本身没有签到功能。社区脚本做的都是登录保活 + 浏览主题，本项目同样只做这两件事。
+linux.do 是 Discourse 论坛，本身没有签到功能。社区脚本做的都是登录保活 + 浏览主题，本项目同样只做这两件事：校验登录态、随机读几个主题，然后把**真实统计**打出来。
+
+### LinuxDo 的阅读上报和点赞
+
+这两个动作默认关闭，要显式打开：
+
+| 变量 / 字段 | 默认 | 作用 |
+|---|---|---|
+| `LINUXDO_BROWSE` / `browse` | 3（上限 10） | 随机读几个主题 |
+| `LINUXDO_READ_REPORT` / `read_report` | 0（关） | 设 `1` 时把阅读耗时上报给 `/topics/timings` |
+| `LINUXDO_LIKE` / `like` | 0（关） | 点赞配额，上限 5，带 1.5~3 秒随机间隔，命中 429 立即停 |
+
+打开后能推进 `time_read` / `posts_read_count`，也就是 TL3 考核里"阅读"那一项。但有两个必须知道的限制：
+
+1. **只按真实耗时上报**。上报的总时长就是这次 HTTP 请求实际花掉的时间，按楼层均分，不做任何放大；单次不到 1.5 秒的主题直接跳过。所以它涨得慢 —— 无头请求本来就"没读多久"，这是诚实的代价。真要攒阅读时长，还是得在浏览器里真看。
+2. **技术上可以刷，本程序不提供**。Discourse 服务端只有一条上限：`PostTiming::MAX_READ_TIME_PER_BATCH = 60_000`，即单批每楼最多计 60 秒，**没有任何"人不可能读这么快"的校验**。也就是说循环发几次、每次报满 60 秒，几分钟就能刷出几小时阅读时长。这属于伪造活跃记录，不是签到，所以本模块刻意不开放自定义时长。
+
+统计口径说明：`阅读时长` / `已读帖数` / `活跃天数` / `点赞/获赞` 全部读自 `/u/<用户名>.json` 的 `user_stat`，和 linux.do 个人主页显示的一致。TL3 的具体阈值由站点自己定（还会随社区调整），本项目不写死数字 —— 要看进度去 [connect.linux.do](https://connect.linux.do/)。
+
+如果这几行没出现，说明 `/u/<用户名>.json` 被拦了或返回了非 JSON，不影响签到结论，只是少了展示。
+
 
 **Actions 跑成功了但没收到通知？**
 先确认配的是哪一组变量、两个变量是否都填了（Telegram 需要 token 和 chat id 同时存在）；再点开日志看末尾有没有推送报错。
@@ -796,6 +819,7 @@ linux.do 是 Discourse 论坛，本身没有签到功能。社区脚本做的都
 - [Sitoi/dailycheckin](https://github.com/Sitoi/dailycheckin) — MIT
 - [BeacherZ/dailycheckin-plus](https://github.com/BeacherZ/dailycheckin-plus) — MIT
 - [Chankin026/linuxdo-v2ex-checkin](https://github.com/Chankin026/linuxdo-v2ex-checkin)
+- [xiaowanjiagit/linuxdo](https://github.com/xiaowanjiagit/linuxdo) — MIT，油猴脚本；`/topics/timings` 阅读上报的请求体格式与 `discourse-reactions` 点赞接口取自该项目
 - [wes-lin/Cloud189Checkin](https://github.com/wes-lin/Cloud189Checkin) — ISC，运行时依赖 `cloud189-sdk`
 - [donma033x/nodeseek-checkin](https://github.com/donma033x/nodeseek-checkin)、[luck7x/nodeseek-hybrid-signin](https://github.com/luck7x/nodeseek-hybrid-signin) — 用 `curl_cffi` 换指纹过 Cloudflare 的思路来自这两个项目
 
