@@ -13,6 +13,7 @@ from .pan946 import Pan946
 from .pojie import Pojie
 from .right import EnShan
 from .smzdm import Smzdm
+from .tekqart import Tekqart
 from .tieba import Tieba
 from .v2ex import V2ex
 from .wnflb import WnflbForum
@@ -32,6 +33,7 @@ SITES = [
     Kafan,
     EnShan,
     Pan946,
+    Tekqart,
 ]
 
 BY_KEY = {site.key.lower(): site for site in SITES}

@@ -71,6 +71,7 @@ DOMAINS: dict[str, tuple[str, ...]] = {
     "POJIE": ("52pojie.cn",),
     "KAFAN": ("kafan.cn",),
     "ENSHAN": ("right.com.cn",),
+    "TEKQART": ("tekqart.com",),
 }
 
 # 这些站点的 cookie 拿过去也没用：天翼云盘走账密 + SDK，跟浏览器会话无关

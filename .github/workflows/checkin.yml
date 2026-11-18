@@ -53,6 +53,9 @@ jobs:
           POJIE_COOKIE: ${{ secrets.POJIE_COOKIE }}
           KAFAN_COOKIE: ${{ secrets.KAFAN_COOKIE }}
           ENSHAN_COOKIE: ${{ secrets.ENSHAN_COOKIE }}
+          TEKQART_COOKIE: ${{ secrets.TEKQART_COOKIE }}
+          TEKQART_KEEP_CF: ${{ secrets.TEKQART_KEEP_CF }}
+          TEKQART_UA: ${{ secrets.TEKQART_UA }}
           PAN946_EMAIL: ${{ secrets.PAN946_EMAIL }}
           PAN946_PASSWORD: ${{ secrets.PAN946_PASSWORD }}
           PAN946_COOKIE: ${{ secrets.PAN946_COOKIE }}

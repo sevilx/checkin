@@ -27,8 +27,9 @@
 | 卡饭论坛 | Cookie（含 `r6pb_69df_auth`、`r6pb_69df_saltkey`） | 站点 GBK 编码；打卡入口是导航栏图标，提交幂等 |
 | 恩山无线论坛 | Cookie（含 `rHEX_2132_auth`、`rHEX_2132_saltkey`） | Discuz `erling_qd` 插件签到（要现取 `formhash`，机房 IP 易被 521 拦） |
 | 盘就是六 | 邮箱 + 密码，或 Cookie（`bbs_uid`、`bbs_token`） | Xiuno BBS，`POST my-sign.htm` 签到；支持账号密码每日自动登录，不用同步 cookie |
+| 品技论坛 | Cookie（含 `XnMp_2132_auth`、`XnMp_2132_saltkey`） | Discuz `zqlj_sign` 天天打卡：页面现取 8 位 `sign` 再 GET；Cloudflare 站点，自动换指纹 |
 
-> NodeSeek、LinuxDo、V2EX 都挂在 Cloudflare 后面，**机房 IP 或频繁换 IP 的代理容易被拦成 403**。
+> NodeSeek、LinuxDo、V2EX、品技论坛都挂在 Cloudflare 后面，**机房 IP 或频繁换 IP 的代理容易被拦成 403**。
 > 程序会用 `curl_cffi` 模仿真实浏览器的 TLS 指纹、并在被拦时自动换几种指纹重试，
 > 同时把「被拦截」和「cookie 失效」分开提示，不会让你白白重配 cookie。处理办法见 [FAQ](#faq)。
 
@@ -90,6 +91,8 @@ Fork 出来的仓库默认不跑工作流。进 **Actions** 标签，看到提�
 | `ENSHAN_COOKIE` | 恩山无线论坛 Cookie（含 `rHEX_2132_auth`、`rHEX_2132_saltkey`） |
 | `PAN946_EMAIL` / `PAN946_PASSWORD` | 盘就是六的登录邮箱 + 密码（推荐，每天自动登录，不会过期） |
 | `PAN946_COOKIE` | 盘就是六 Cookie（含 `bbs_uid`、`bbs_token`），不想填密码时用 |
+| `TEKQART_COOKIE` | 品技论坛 Cookie（含 `XnMp_2132_auth`、`XnMp_2132_saltkey`） |
+| `TEKQART_KEEP_CF` / `TEKQART_UA` | 可选：出口被 Cloudflare 挑战时才用，设 `1` 保留浏览器 `cf_clearance`，并把当时的浏览器 UA 填进 `TEKQART_UA`（两者必须配对） |
 | `TY189_USERNAME` / `TY189_PASSWORD` | 天翼账号 + 密码 |
 | 推送渠道 | 见[推送通知](#推送通知)，至少配一组，不配就只写日志 |
 
@@ -654,6 +657,16 @@ GLOBAL_PROXY=http://192.168.1.2:7890
 
 **面板打不开？**
 看 `docker compose logs checkin` 里有没有 `[panel] 监听 http://...`；确认 NAS 防火墙和端口映射放通 8181；`./data` 必须挂载，否则重启状态就没了。
+
+**品技论坛（tekqart.com）打卡为什么判得这么严？**
+
+三条实测结论，都是为了让"看起来成功"不变成"其实没打上"：
+
+1. **游客态也渲染「点击打卡」按钮**。实测游客 GET `&sign=xxx` 只是原样返回同一页面，不报错也不打卡。所以判登录只认页面脚本里的 `discuz_uid`（游客是 `0`）和退出链接，不认按钮、也不认"有没有报错"。
+2. **`sign` 是每次渲染现生成的 8 位 hex**，必须先拉签到页现取再 GET，不能把地址存下来。提交是幂等的：打过之后按钮变成「今日已打卡」，程序会直接跳过提交，不会重复请求。
+3. **站点挂在 Cloudflare 后面**。默认丢掉浏览器里的 `cf_clearance`（绑定签发时的 IP + UA），用 `curl_cffi` 换指纹重试；家宽出口一般能直连。实在被挑战才考虑 `keep_cf=1` + `ua` 配对，或给这个站单独配代理。
+
+另外这个签到页主体是一张 30 人的打卡榜单，满页都是用户名链接和「今日已打卡」字样。所以取用户名只认导航栏的 `vwmy`、取个人动态只认「我的打卡动态」区块 —— 否则会把榜单里第一个人和全站累计数字当成你自己的成绩。
 
 **看不到首次启动的口令 / 日志太长翻不到？**
 `docker compose logs checkin | grep -A3 面板口令`。只打印一次，错过了就设 `PANEL_PASSWORD` 重启，或者删 `data/panel_auth.json` 再启动。
