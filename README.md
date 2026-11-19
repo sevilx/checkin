@@ -25,7 +25,7 @@
 | LinuxDo | Cookie（含 `_t`） | 登录保活 + 真实统计（阅读时长 / 已读帖数 / 获赞），可选阅读上报与点赞（默认关） |
 | 吾爱破解 | Cookie（含 `htVC_2132_auth`、`htVC_2132_saltkey`、`wzws_cid`） | Discuz 任务系统签到（有瑞数动态防护，见 [FAQ](#faq)） |
 | 卡饭论坛 | Cookie（含 `r6pb_69df_auth`、`r6pb_69df_saltkey`） | 站点 GBK 编码；打卡入口是导航栏图标，提交幂等 |
-| 恩山无线论坛 | Cookie（含 `rHEX_2132_auth`、`rHEX_2132_saltkey`） | Discuz `erling_qd` 插件签到（要现取 `formhash`，机房 IP 易被 521 拦） |
+| 恩山无线论坛 | Cookie（含 `rHEX_2132_auth`、`rHEX_2132_saltkey`、`wzws_cid`） | Discuz `erling_qd` 插件签到（要现取 `formhash`）；已加瑞数防护，凭证与机房 IP 不友好，建议家宽跑 |
 | 盘就是六 | 邮箱 + 密码，或 Cookie（`bbs_uid`、`bbs_token`） | Xiuno BBS，`POST my-sign.htm` 签到；支持账号密码每日自动登录，不用同步 cookie |
 | 品技论坛 | Cookie（含 `XnMp_2132_auth`、`XnMp_2132_saltkey`） | Discuz `zqlj_sign` 天天打卡：页面现取 8 位 `sign` 再 GET；Cloudflare 站点，自动换指纹 |
 
@@ -88,7 +88,7 @@ Fork 出来的仓库默认不跑工作流。进 **Actions** 标签，看到提�
 | `LINUXDO_LIKE` | 点赞配额，默认 0（关），上限 5 |
 | `POJIE_COOKIE` | 吾爱破解 Cookie（含 `htVC_2132_auth`、`htVC_2132_saltkey`） |
 | `KAFAN_COOKIE` | 卡饭论坛 Cookie（含 `r6pb_69df_auth`、`r6pb_69df_saltkey`） |
-| `ENSHAN_COOKIE` | 恩山无线论坛 Cookie（含 `rHEX_2132_auth`、`rHEX_2132_saltkey`） |
+| `ENSHAN_COOKIE` | 恩山无线论坛 Cookie（含 `rHEX_2132_auth`、`rHEX_2132_saltkey`，以及瑞数凭证 `wzws_cid`） |
 | `PAN946_EMAIL` / `PAN946_PASSWORD` | 盘就是六的登录邮箱 + 密码（推荐，每天自动登录，不会过期） |
 | `PAN946_COOKIE` | 盘就是六 Cookie（含 `bbs_uid`、`bbs_token`），不想填密码时用 |
 | `TEKQART_COOKIE` | 品技论坛 Cookie（含 `XnMp_2132_auth`、`XnMp_2132_saltkey`） |
@@ -782,10 +782,11 @@ docker compose config -q && echo OK
 
 另外卡饭整站是 **GBK 编码**，程序里所有解析都显式按 GBK 解码，不用你管，但自己抓包看响应时容易看到乱码，别以为是程序坏了。
 
-**恩山无线论坛报 HTTP 521 / 520，或者提示"请求含有非法字符"？**
+**恩山无线论坛报"首页返回的内容不像论坛页面（var arg1=...）"、HTTP 521 / 520，或者提示"请求含有非法字符"？**
 
-两种完全不同的原因：
+三种完全不同的原因：
 
+- **`首页返回的内容不像论坛页面（var arg1='…'）`**：站点加了**瑞数（WZWS）动态防护**，返回的是 JS 挑战页而不是论坛内容（HTTP 200，所以旧版会误判成"站点改版"）。瑞数要浏览器执行混淆 JS 算一次性凭证，requests / curl_cffi 都算不出来。程序现在会明确报"被瑞数拦截"，请照提示：浏览器打开论坛首页**等页面真正显示** → 立刻 `tools\sync.cmd --sites enshan` 同步含最新 `wzws_cid` 的整段 Cookie → 尽快点签到。`wzws_cid` 和出口 IP 绑定、几十分钟就过期，云端 Actions 的机房 IP 更容易被挑战，**家宽 NAS 上跑通常能带过**。
 - **521 / 520 / 522**：恩山挂在阿里云 ESA 后面，**对机房 IP 很不友好**。GitHub Actions 的出口 IP 基本都会被拦，家里 NAS 的宽带 IP 反而正常。所以这站建议只在本机/NAS 上跑，Actions 上失败是预期行为，不是你配错了。
 - **"您当前的访问请求当中含有非法字符"**：这是 Discuz 的表单串校验失败（`request_tainting`），不是站点故障。恩山的签到接口必须带**当前会话的 `formhash`**，随便编一个就会吃这个 503。程序会先从首页现取 `formhash` 再提交；如果还是报这个，说明 cookie 里的登录票据已经过期、服务端换了会话，重新复制一次 Cookie 即可。
 

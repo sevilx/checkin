@@ -65,6 +65,14 @@ MESSAGE_BOX = re.compile(r'id="messagetext"[^>]*>(.*?)</div>', re.S)
 # Discuz 页面骨架特征：用来区分「真的没登录」和「拿到的是 WAF / 异常页」
 DISCUZ_MARKERS = ("discuz", "forum.php", "scbar", "id=\"hd\"")
 
+# 瑞数（WZWS）动态防护的 JS 挑战页特征。2026-11 起恩山首页偶尔返回这种页面：
+# HTTP 200 + 一段混淆 JS（`var arg1='...';(function(a,c){var G=a0j,...`），
+# 没有 <title>、没有 Discuz 骨架。`looks_blocked()` 只认 403/429/503，
+# 挑战页是 200 会漏判，最后掉进「首页不像论坛页面」的含糊兜底，所以单独识别。
+RUI_SHU_MARKERS = ("var arg1=", "var arg1 =", "createelement")
+# 瑞数凭证：和 IP + 浏览器指纹绑定，过期后浏览器能重算、纯 HTTP 客户端不行。
+WZWS_COOKIE_KEYS = ("wzws_cid", "wzws_sid")
+
 LOGIN_HINTS = ("请先登录", "尚未登录", "您需要登录", "登录后才能", "请登录后")
 DONE_HINTS = ("已经签到", "已签到", "签到过了", "今日已签到", "今天已经签到")
 OK_HINTS = ("签到成功", "签到完成", "已成功签到", "获得奖励")
@@ -88,7 +96,8 @@ class EnShan(Site):
     fields = ("cookie",)
     doc = (
         "登录 right.com.cn → F12 → 网络 → 任意请求 → 请求标头里的 Cookie 整行复制"
-        "（要含以 _2132_auth 和 _2132_saltkey 结尾的两条）"
+        "（要含以 _2132_auth 和 _2132_saltkey 结尾的两条；站点上了瑞数防护，"
+        "还要含 wzws_cid——它和出口 IP 绑定、几十分钟就过期，需在浏览器看到首页后立即同步）"
     )
 
     # ------------------------------------------------------------------ #
@@ -101,6 +110,55 @@ class EnShan(Site):
                 f"{what}返回 HTTP {status}：恩山的 WAF 拦截了这次请求。"
                 "这站对机房 IP 不友好，建议在家宽环境的 NAS 上跑，别用云端 Actions"
             )
+
+    @staticmethod
+    def _is_ruishu(html: str) -> bool:
+        """判断是不是瑞数的 JS 挑战页（HTTP 200，但正文是混淆 JS 拼出来的）。
+
+        实测样本开头：`var arg1='EC174E...';(function(a,c){var G=a0j,...`。
+        `var arg1=` 是瑞数挑战页的独有指纹（正常 Discuz 页绝不会有），单独即可判定；
+        报错里的片段常在 `parseInt(G(0x1` 处被截断、看不到 `createElement`，
+        所以不能要求两者同时出现。另留「无 <title> 但有 createElement」兜底，与 pojie 一致。
+        """
+        if not html:
+            return False
+        lowered = html.lower()
+        if "var arg1=" in lowered or "var arg1 =" in lowered:
+            return True
+        return "<title>" not in lowered and "createelement" in lowered
+
+    def _ruishu_cookies(self) -> tuple[bool, bool]:
+        """当前 Cookie 里带没带瑞数凭证，决定报错措辞（过期 vs 根本没同步）。"""
+        cookie = (self.cookie or "").lower()
+        return ("wzws_cid=" in cookie, "wzws_sid=" in cookie)
+
+    def _ruishu_error(self) -> str:
+        has_cid, has_sid = self._ruishu_cookies()
+        if has_cid or has_sid:
+            head = (
+                "被瑞数动态防护（WZWS）拦截：首页返回的是 JS 挑战页，不是恩山的论坛页面。\n"
+                "你同步过来的瑞数凭证（wzws_cid / wzws_sid）**已过期**——它和出口 IP 绑定，"
+                "通常几十分钟就失效，而 Discuz 的登录票据能撑几天，"
+                "所以会出现「登录态还在、就是拿不到页面」这种情况。"
+            )
+        else:
+            head = (
+                "被瑞数动态防护（WZWS）拦截：首页返回的是 JS 挑战页，不是恩山的论坛页面。\n"
+                "而且当前 Cookie 里**没有瑞数凭证**（wzws_cid / wzws_sid），"
+                "说明同步时浏览器里恩山并非活跃会话，或复制的整段 Cookie 少了这两个字段。"
+            )
+        steps = (
+            "处理办法：\n"
+            "1) 在浏览器打开 https://www.right.com.cn/forum/forum.php ，**等首页真正显示出来**"
+            "（不是一闪而过的验证页），说明浏览器已经重新算过挑战；\n"
+            "2) 立刻运行 tools\\sync.cmd --sites enshan 把含最新 wzws_cid 的整段 Cookie 同步过来；\n"
+            "3) 回面板点「立即签到」，最好在 60 秒内完成。"
+        )
+        note = (
+            "说明：瑞数要求浏览器执行混淆 JS 算出一次性参数，requests / curl_cffi 都算不出来"
+            "（吾爱破解实测两种客户端各试 3 次全被拦）。站点的挑战是按出口 IP 触发的："
+            "云端 Actions 的机房 IP 更容易被挑战，家宽 NAS 上跑通常能带过。")
+        return f"{head}\n{steps}\n{note}"
 
     @staticmethod
     def _formhash(html: str) -> str:
@@ -165,6 +223,9 @@ class EnShan(Site):
         page = session.get(FORUM, timeout=25)
         html = page.text or ""
         self._guard(page.status_code, html, page.headers, "打开论坛首页")
+        # 瑞数挑战页是 HTTP 200，looks_blocked 认不出来，必须在登录判据之前单独拦。
+        if self._is_ruishu(html):
+            raise RuntimeError(self._ruishu_error())
         if page.status_code >= 500:
             raise RuntimeError(f"打开论坛首页返回 HTTP {page.status_code}，站点可能在维护")
         if page.status_code != 200:
@@ -308,6 +369,13 @@ class EnShan(Site):
             return False, f"连不上站点：{exc}"
 
         html = resp.text or ""
+        if self._is_ruishu(html):
+            has_cid, _ = self._ruishu_cookies()
+            return False, (
+                "被瑞数防护拦截，无法检测：Cookie 里的瑞数凭证已过期，重新同步一次"
+                if has_cid else
+                "被瑞数防护拦截，无法检测：Cookie 里没有瑞数凭证"
+            )
         if looks_blocked(resp.status_code, html, resp.headers):
             return False, f"被防火墙拦截（HTTP {resp.status_code}）"
         if resp.status_code != 200:
