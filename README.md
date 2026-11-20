@@ -86,6 +86,7 @@ Fork 出来的仓库默认不跑工作流。进 **Actions** 标签，看到提�
 | `LINUXDO_BROWSE` | 浏览主题数，默认 3，上限 10 |
 | `LINUXDO_READ_REPORT` | 设 `1` 才上报阅读时长（默认关，见[阅读上报](#linuxdo-的阅读上报和点赞)） |
 | `LINUXDO_LIKE` | 点赞配额，默认 0（关），上限 5 |
+| `LINUXDO_KEEP_CF` / `LINUXDO_UA` | 可选：只有容器和浏览器**同出口**时才用，设 `1` 保留浏览器 `cf_clearance`，并把当时浏览器 UA 填进 `LINUXDO_UA`（三者必须配对；出口不一致别开） |
 | `POJIE_COOKIE` | 吾爱破解 Cookie（含 `htVC_2132_auth`、`htVC_2132_saltkey`） |
 | `KAFAN_COOKIE` | 卡饭论坛 Cookie（含 `r6pb_69df_auth`、`r6pb_69df_saltkey`） |
 | `ENSHAN_COOKIE` | 恩山无线论坛 Cookie（含 `rHEX_2132_auth`、`rHEX_2132_saltkey`，以及瑞数凭证 `wzws_cid`） |
@@ -732,10 +733,14 @@ docker compose config -q && echo OK
 2. **出口 IP 决定一切**。机房 IP、云服务器、部分机场节点会被直接挑战；家宽 / NAS 直连成功率明显更高。可以给单个站点配代理，走和浏览器同一个出口
 3. **不要抄 `cf_clearance`**。它绑定「签发时的 IP + User-Agent」，你从电脑浏览器复制、拿到 NAS 上发出去必然对不上，反而更像"拿着别人票据的请求"。程序默认会把它连同 `__cf_bm`、`_cfuvid` 一起丢掉。确实要保留就配 `keep_cf=true`，并把 `ua` 写成当初那个浏览器的 UA，三者必须一致
 
-**二、站点回话了但拒绝登录（401 / 403，提示说"cookie 不被承认"）** —— 这才是 cookie 的问题：
+**二、站点回话了但拒绝登录（401 / 403 / 404，提示说"cookie 不被承认"）** —— 三类里只有一类是 cookie 的问题：
 
 - **NodeSeek**：cookie 里必须有 `session`。它和 `pjwt` 都是 HttpOnly，`document.cookie` 拿不到，要从 F12 → 网络 → 请求标头 → `Cookie` 整行复制
-- **LinuxDo**：cookie 里必须有 `_t`（Discourse 的登录令牌，同样是 HttpOnly）。**这是"我在电脑上明明登录着、程序却说失效"最常见的原因** —— 从控制台 `document.cookie` 复制出来的 cookie 里根本没有 `_t`。正确姿势：F12 → 网络 → 点任意一个请求 → 请求标头 → 把 `Cookie` 整行复制
+- **LinuxDo 报 404、且 cookie 里确实有 `_t`**：多半**不是** `_t` 失效 —— Discourse 对未登录的接口本来就回 404，而挂在 CF 后的 linux.do 在**出口 IP 被挑战**时也回 404/403。按这个顺序排查：
+  1. **先看出口**：NAS 若走代理 / 机场节点，给这个站点单独配一条**和浏览器同一个出口（同一节点、同一公网 IP）**的代理。机场节点一切换出口 IP，登录态立刻对不上，这比 `_t` 过期常见得多；
+  2. **再试保留 CF 会话**：确认容器和浏览器同出口后，在设置里把 `keep_cf=1` 打开、并把当时那个浏览器的 UA 填进 `ua`（LinuxDo 已暴露这两个字段）。出口不一致时**不要开**，会更像伪造请求；
+  3. **最后才是 `_t` 本身**：改密码 / 手动退出所有设备 / 换设备都会让它失效，重新登录一次再整行复制。
+- **LinuxDo cookie 里根本没有 `_t`**：这是 HttpOnly，控制台 `document.cookie` 拿不到，必须从 F12 → 网络 → 点任意请求 → 请求标头 → `Cookie` 整行复制。**这是"电脑上明明登录着、程序却说失效"最常见的原因**
 - 改过密码、在别处点过"退出所有设备"，`_t` 都会立即失效，重新登录一次就好
 
 **吾爱破解提示"被瑞数动态防护拦截（WZWS）"？**
@@ -756,18 +761,21 @@ docker compose config -q && echo OK
 
 程序会分两种说法告诉你到底哪种情况：cookie 里**带了** `wzws_cid` 还被拦，就是过期了；**完全没带**，就是同步时浏览器里吾爱不是活跃会话。
 
-三条路：
+**还有一个更常见的根因：出口 IP 漂移。** `wzws_cid` 和你换凭证时的出口 IP 绑在一起。如果 NAS 走代理 / 机场节点，一切换节点、重连或共用出口，IP 就变了，刚同步来的凭证立刻对不上——这比"凭证过期"更容易发生，表现却一模一样。所以下面的接力有个**硬前提**：浏览器和 NAS 必须在同一时间走**同一个出口 IP**。
+
+三条路（都以上面的同出口为前提）：
 
 1. **手动刷一次（最快）**：浏览器打开 https://www.52pojie.cn/ 任意页面，**等论坛首页真正显示出来**（不是转圈的验证页），然后 60 秒内运行
    ```
    python tools\sync_cookies.py --sites pojie
    ```
-   再回面板点「立即签到」。凭证只有几十分钟寿命，所以动作要连着做。
+   再回面板点「立即签到」。凭证只有几十分钟寿命，所以动作要连着做。**若浏览器和 NAS 不在一个出口，让浏览器挂上 NAS 用的那条固定节点，或两边都直连**，否则同步了也白搭。
 2. **定时同步（推荐）**：让计划任务每 20 分钟自动同步一次，你只要平时浏览器开着吾爱，凭证就一直是新的。口令用 `--remember` 存一次，之后不需要交互：
    ```bat
    schtasks /create /tn "checkin-cookie-sync" /sc minute /mo 20 ^
      /tr "python C://path//to//checkin-hub//tools//sync_cookies.py --nas http://192.168.99.130:8181 --sites pojie,kafan,wnflb"
    ```
+   注意这条同样是**从 Windows 本机推给 NAS**：浏览器那一侧的出口要和 NAS 签到时一致（同节点或都直连）。
 3. **放弃这个站**：吾爱破解的价值主要在资源帖，签到收益有限，很多人直接不开。
 
 **别再试 Playwright 之外的花样了** —— 我实测过：`requests` 和 `curl_cffi`（safari17 指纹）各请求 3 次，**6 次全部被拦**。瑞数不看 TLS 指纹，它就是要求真的执行那段混淆 JS。GitHub 上那些脚本（`RoadIsLong/52pojie_Sign`、`jwmycz/py52pojie`）现在基本都失效，也是这个原因。

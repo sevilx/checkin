@@ -63,13 +63,16 @@ def _duration(seconds: int) -> str:
 class LinuxDo(Site):
     key = "LINUXDO"
     name = "LinuxDo 论坛"
-    fields = ("cookie", "browse", "read_report", "like")
+    fields = ("cookie", "browse", "read_report", "like", "keep_cf", "ua")
     doc = (
         "登录 linux.do → F12 → 网络 → 任意请求 → 请求标头里的 Cookie 整行复制"
         "（必须有 _t，它是 HttpOnly，控制台 document.cookie 里没有）。"
         f"browse=浏览主题数（默认 3，上限 {MAX_BROWSE}）；"
         "read_report=1 时把实际阅读耗时上报（默认关）；"
-        f"like=N 时对本次读过的帖子点赞（默认关，上限 {MAX_LIKE}）"
+        f"like=N 时对本次读过的帖子点赞（默认关，上限 {MAX_LIKE}）；"
+        "keep_cf=1 时保留浏览器里的 cf_clearance（默认丢弃），"
+        "必须同时把当时那个浏览器的 UA 填进 ua，且容器出口 IP 要和浏览器一致——"
+        "三项对不上就别开，会更像伪造请求"
     )
     cf_impersonates = ("safari15_5", "chrome120", "chrome110")
 
@@ -389,7 +392,13 @@ class LinuxDo(Site):
 
     # ------------------------------------------------------------------ #
     def _guard(self, resp) -> None:
-        """把非 200 的结果翻译成能照做的动作；风控拦截已由 browser_request 提前抛掉。"""
+        """把非 200 的结果翻译成能照做的动作；风控拦截已由 browser_request 提前抛掉。
+
+        403/404 不能一律说成 "_t 失效"：Discourse 对未登录的 /session/current.json
+        本来就回 404，而挂在 Cloudflare 后的 linux.do 在出口 IP 被挑战时，接口也会
+        回 403/404。真正 "_t 失效" 只是其中一种可能，得先看是不是出口/凭证的问题，
+        否则用户会反复重登 cookie，问题却一直不解决。
+        """
         if resp.status_code == 200:
             return
         if resp.status_code in (401, 403, 404):
@@ -400,10 +409,17 @@ class LinuxDo(Site):
                     "控制台里输 document.cookie 是拿不到的。"
                     "请用 F12 → 网络 → 任意请求 → 请求标头 → Cookie 整行复制。"
                 )
+            # 有 _t 却被拒：优先怀疑出口 IP / CF 会话，而不是又让用户去重登。
+            # 只有当确实没有 cf_clearance 可用、且出口这一层已排除时，才指向 _t 本身。
             raise RuntimeError(
-                f"登录校验被拒（HTTP {resp.status_code}），域名能解析、站点也回话了 —— "
-                "Cookie 里的 _t 已不被承认（改密码 / 手动退出登录 / 换设备都会让它失效），"
-                "重新登录一次再复制完整 Cookie"
+                f"登录校验被拒（HTTP {resp.status_code}）。有 _t 但接口不认，按可能性从高到低排查：\n"
+                "1) 出口 IP：如果你在 NAS 上走了代理 / 机场节点，Cloudflare 会认出口——"
+                "先给这个站点配一条和浏览器同一个出口（同一节点、同一公网 IP）的代理再试；\n"
+                "2) CF 会话：浏览器里 cf_clearance 是在你的出口换来的，默认已被本程序丢掉。"
+                "若确认容器和浏览器同出口，可在设置里把 keep_cf=1 打开，并把当时那个浏览器的 UA 填进 ua"
+                "（两者必须配对；出口不一致时千万别开，会更像伪造）；\n"
+                "3) 排除以上两步后仍不行，才是 _t 本身失效：改密码 / 手动退出 / 换设备都会让它失效，"
+                "重新登录一次再复制完整 Cookie。"
             )
         raise RuntimeError(f"登录校验失败 HTTP {resp.status_code}")
 
