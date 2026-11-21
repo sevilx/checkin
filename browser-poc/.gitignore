@@ -1,0 +1,13 @@
+# 浏览器 profile：含长时效 Discuz 票据与浏览器算出的 wzws_cid，绝不能进 git
+profile/
+
+# 截图：可能带登录态页面信息，绝不能进 git
+shots/
+
+# 日志
+*.log
+
+# 凭据：运行时用 --env-file .env 注入，绝不能进 git
+.env
+.env.*
+!.env.example
