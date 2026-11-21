@@ -447,7 +447,7 @@ def import_cookies(raw_items, source: str = "panel", do_check: bool = False) -> 
     ignored: list[str] = []
 
     if isinstance(raw_items, list):
-        # 也接受 [{"site": "POJIE", "cookie": "..."}] 这种更啰嗦但更好读的写法
+        # 也接受 [{"site": "LINUXDO", "cookie": "..."}] 这种更啰嗦但更好读的写法
         for item in raw_items:
             if isinstance(item, dict) and item.get("site"):
                 items[str(item["site"]).upper()] = {

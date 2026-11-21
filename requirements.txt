@@ -1,5 +1,5 @@
 requests>=2.31.0
-# requests 分支的站点（吾爱 / 恩山 / V2EX）配 socks5h:// 代理时必须装 PySocks。
+# requests 分支的站点（恩山 / V2EX）配 socks5h:// 代理时必须装 PySocks。
 # 缺了它 requests 会静默忽略 socks 代理，看起来像"配了代理却没走代理"；
 # LinuxDo 走 curl_cffi 分支不受影响，但其它站点受影响。
 PySocks>=1.7.1

@@ -23,7 +23,6 @@
 | NodeSeek | Cookie（`session`） | 随机 / 固定鸡腿（Cloudflare 站点，自动换浏览器指纹） |
 | 天翼云盘 189 | 手机号 + 密码，或 `SSON` | 个人空间签到 + 容量变化（登录成功后会话缓存 6 天） |
 | LinuxDo | Cookie（含 `_t`） | 登录保活 + 真实统计（阅读时长 / 已读帖数 / 获赞），可选阅读上报与点赞（默认关） |
-| 吾爱破解 | Cookie（含 `htVC_2132_auth`、`htVC_2132_saltkey`、`wzws_cid`） | Discuz 任务系统签到（有瑞数动态防护，见 [FAQ](#faq)） |
 | 卡饭论坛 | Cookie（含 `r6pb_69df_auth`、`r6pb_69df_saltkey`） | 站点 GBK 编码；打卡入口是导航栏图标，提交幂等 |
 | 恩山无线论坛 | Cookie（含 `rHEX_2132_auth`、`rHEX_2132_saltkey`、`wzws_cid`） | Discuz `erling_qd` 插件签到（要现取 `formhash`）；已加瑞数防护，凭证与机房 IP 不友好，建议家宽跑 |
 | 盘就是六 | 邮箱 + 密码，或 Cookie（`bbs_uid`、`bbs_token`） | Xiuno BBS，`POST my-sign.htm` 签到；支持账号密码每日自动登录，不用同步 cookie |
@@ -87,7 +86,6 @@ Fork 出来的仓库默认不跑工作流。进 **Actions** 标签，看到提�
 | `LINUXDO_READ_REPORT` | 设 `1` 才上报阅读时长（默认关，见[阅读上报](#linuxdo-的阅读上报和点赞)） |
 | `LINUXDO_LIKE` | 点赞配额，默认 0（关），上限 5 |
 | `LINUXDO_KEEP_CF` / `LINUXDO_UA` | 可选：只有容器和浏览器**同出口**时才用，设 `1` 保留浏览器 `cf_clearance`，并把当时浏览器 UA 填进 `LINUXDO_UA`（三者必须配对；出口不一致别开） |
-| `POJIE_COOKIE` | 吾爱破解 Cookie（含 `htVC_2132_auth`、`htVC_2132_saltkey`） |
 | `KAFAN_COOKIE` | 卡饭论坛 Cookie（含 `r6pb_69df_auth`、`r6pb_69df_saltkey`） |
 | `ENSHAN_COOKIE` | 恩山无线论坛 Cookie（含 `rHEX_2132_auth`、`rHEX_2132_saltkey`，以及瑞数凭证 `wzws_cid`） |
 | `PAN946_EMAIL` / `PAN946_PASSWORD` | 盘就是六的登录邮箱 + 密码（推荐，每天自动登录，不会过期） |
@@ -345,7 +343,7 @@ python -m panel.server               # 起面板，默认 http://127.0.0.1:8080
 | `.env` 或 GitHub Secrets | Actions 部署；不想让凭据落在容器磁盘 |
 | `config.json` | 账号多、想一处集中管理 |
 | 网页「设置」（仅 Docker） | 不想 SSH 改文件，想随时换 cookie；见[网页面板](#网页面板) |
-| 浏览器自动同步（仅 Docker） | cookie 换得勤（52pojie、LinuxDo）、不想每次开 F12；见[下一节](#不想手动复制浏览器自动同步) |
+| 浏览器自动同步（仅 Docker） | cookie 换得勤（如 LinuxDo）、不想每次开 F12；见[下一节](#不想手动复制浏览器自动同步) |
 
 下面先讲怎么拿到 cookie，再分别说这几种写法。
 
@@ -382,7 +380,7 @@ python tools/sync_cookies.py --nas http://192.168.1.10:8181 --remember
 | 场景 | 命令 |
 | --- | --- |
 | 只看会推送什么，不发送 | `--dry-run` |
-| 只更新某几个站 | `--sites pojie,kafan,linuxdo` |
+| 只更新某几个站 | `--sites kafan,linuxdo` |
 | 推送后顺便验一次登录态 | `--check` |
 | 看看本机有哪些 Firefox profile | `--list` |
 | Edge / Chrome 用户 | 装 Cookie-Editor 扩展 → 导出 JSON → `--from-json cookies.json` |
@@ -407,7 +405,6 @@ BAIDUWP_COOKIE='BAIDUID=xxx; BDUSS=yyy; STOKEN=zzz'
 BILIBILI_COOKIE='SESSDATA=xxx; bili_jct=yyy'
 FNNASCLUB_COOKIE='pvRK_2132_auth=xxx'
 WNFLB_COOKIE='S5r8_2132_auth=xxx; S5r8_2132_saltkey=yyy; S5r8_2132_sid=zzz'
-POJIE_COOKIE='htVC_2132_auth=xxx; htVC_2132_saltkey=yyy; wzws_cid=zzz'
 KAFAN_COOKIE='r6pb_69df_auth=xxx; r6pb_69df_saltkey=yyy'
 SMZDM_COOKIE='sess=xxx; __ckguid=yyy'
 TIEBA_COOKIE='BDUSS=xxx; STOKEN=yyy'
@@ -742,43 +739,6 @@ docker compose config -q && echo OK
   3. **最后才是 `_t` 本身**：改密码 / 手动退出所有设备 / 换设备都会让它失效，重新登录一次再整行复制。
 - **LinuxDo cookie 里根本没有 `_t`**：这是 HttpOnly，控制台 `document.cookie` 拿不到，必须从 F12 → 网络 → 点任意请求 → 请求标头 → `Cookie` 整行复制。**这是"电脑上明明登录着、程序却说失效"最常见的原因**
 - 改过密码、在别处点过"退出所有设备"，`_t` 都会立即失效，重新登录一次就好
-
-**吾爱破解提示"被瑞数动态防护拦截（WZWS）"？**
-吾爱破解挂的是**瑞数**，不是 Cloudflare，两者完全不是一回事：
-
-| | Cloudflare | 瑞数（WZWS） |
-|---|---|---|
-| 怎么拦 | 看 TLS 指纹 / JA3 | 发一段混淆 JS，让浏览器算出一次性参数 |
-| 怎么过 | 换 `curl_cffi` 指纹就行 | 必须真的执行 JS，再 POST 到 `/waf_zw_verify` 换 cookie |
-| 纯 HTTP 能否解决 | 能 | **不能** |
-
-所以报这个错不是 cookie 写错了，是**瑞数凭证过期**。看清楚一点：
-
-* Discuz 的登录票据（`xxx_2132_auth` / `xxx_69df_auth`）能撑好几天
-* 瑞数的凭证（`wzws_cid` / `wzws_sid`）通常只有几十分钟
-
-所以会出现「面板检测说 Cookie 有效，一签到就被拦」这种别扭现象 —— 登录是好的，过不了瑞数而已。
-
-程序会分两种说法告诉你到底哪种情况：cookie 里**带了** `wzws_cid` 还被拦，就是过期了；**完全没带**，就是同步时浏览器里吾爱不是活跃会话。
-
-**还有一个更常见的根因：出口 IP 漂移。** `wzws_cid` 和你换凭证时的出口 IP 绑在一起。如果 NAS 走代理 / 机场节点，一切换节点、重连或共用出口，IP 就变了，刚同步来的凭证立刻对不上——这比"凭证过期"更容易发生，表现却一模一样。所以下面的接力有个**硬前提**：浏览器和 NAS 必须在同一时间走**同一个出口 IP**。
-
-三条路（都以上面的同出口为前提）：
-
-1. **手动刷一次（最快）**：浏览器打开 https://www.52pojie.cn/ 任意页面，**等论坛首页真正显示出来**（不是转圈的验证页），然后 60 秒内运行
-   ```
-   python tools\sync_cookies.py --sites pojie
-   ```
-   再回面板点「立即签到」。凭证只有几十分钟寿命，所以动作要连着做。**若浏览器和 NAS 不在一个出口，让浏览器挂上 NAS 用的那条固定节点，或两边都直连**，否则同步了也白搭。
-2. **定时同步（推荐）**：让计划任务每 20 分钟自动同步一次，你只要平时浏览器开着吾爱，凭证就一直是新的。口令用 `--remember` 存一次，之后不需要交互：
-   ```bat
-   schtasks /create /tn "checkin-cookie-sync" /sc minute /mo 20 ^
-     /tr "python C://path//to//checkin-hub//tools//sync_cookies.py --nas http://192.168.99.130:8181 --sites pojie,kafan,wnflb"
-   ```
-   注意这条同样是**从 Windows 本机推给 NAS**：浏览器那一侧的出口要和 NAS 签到时一致（同节点或都直连）。
-3. **放弃这个站**：吾爱破解的价值主要在资源帖，签到收益有限，很多人直接不开。
-
-**别再试 Playwright 之外的花样了** —— 我实测过：`requests` 和 `curl_cffi`（safari17 指纹）各请求 3 次，**6 次全部被拦**。瑞数不看 TLS 指纹，它就是要求真的执行那段混淆 JS。GitHub 上那些脚本（`RoadIsLong/52pojie_Sign`、`jwmycz/py52pojie`）现在基本都失效，也是这个原因。
 
 **卡饭论坛的签到入口在哪？为什么找不到"签到"两个字？**
 卡饭用的是 `dsu_amupper`（打卡机）插件，它把打卡按钮做成了**图片**（`dk.png`），所以整页搜不到"签到"这两个中文字 —— 早期版本靠中文关键词判断状态，结果全落空。

@@ -118,7 +118,7 @@ class EnShan(Site):
         实测样本开头：`var arg1='EC174E...';(function(a,c){var G=a0j,...`。
         `var arg1=` 是瑞数挑战页的独有指纹（正常 Discuz 页绝不会有），单独即可判定；
         报错里的片段常在 `parseInt(G(0x1` 处被截断、看不到 `createElement`，
-        所以不能要求两者同时出现。另留「无 <title> 但有 createElement」兜底，与 pojie 一致。
+        所以不能要求两者同时出现。另留「无 <title> 但有 createElement」兜底。
         """
         if not html:
             return False
@@ -156,7 +156,7 @@ class EnShan(Site):
         )
         note = (
             "说明：瑞数要求浏览器执行混淆 JS 算出一次性参数，requests / curl_cffi 都算不出来"
-            "（吾爱破解实测两种客户端各试 3 次全被拦）。站点的挑战是按出口 IP 触发的："
+            "（实测两种客户端各试 3 次全被拦）。站点的挑战是按出口 IP 触发的："
             "云端 Actions 的机房 IP 更容易被挑战，家宽 NAS 上跑通常能带过。")
         return f"{head}\n{steps}\n{note}"
 

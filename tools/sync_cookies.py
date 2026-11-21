@@ -3,7 +3,7 @@
 
 为什么是这个思路
 ----------------
-论坛（尤其 52pojie 的瑞数、LinuxDo 的 Cloudflare）的会话 cookie 只有几小时到
+论坛（尤其挂瑞数的站点、LinuxDo 的 Cloudflare）的会话 cookie 只有几小时到
 几天有效期。你每天本来就会用浏览器逛这些站，cookie 一直是最新的；与其在 NAS 上
 装个 1GB 的 Playwright 去"模拟登录"，不如把浏览器里现成的那份同步过去。
 
@@ -22,7 +22,7 @@
     python tools/sync_cookies.py --dry-run
 
     # 只同步两个站
-    python tools/sync_cookies.py --nas ... --sites pojie,kafan,linuxdo
+    python tools/sync_cookies.py --nas ... --sites kafan,linuxdo
 
     # 顺手让 NAS 立刻验一次登录态
     python tools/sync_cookies.py --nas ... --check
@@ -68,7 +68,6 @@ DOMAINS: dict[str, tuple[str, ...]] = {
     "LINUXDO": ("linux.do",),
     "FNNASCLUB": ("fnnas.com",),
     "WNFLB": ("wnflb2023.com",),
-    "POJIE": ("52pojie.cn",),
     "KAFAN": ("kafan.cn",),
     "ENSHAN": ("right.com.cn",),
     "TEKQART": ("tekqart.com",),
@@ -323,7 +322,7 @@ def normalise_expiry(value: int) -> int:
     """把 expiry 统一成「秒」。
 
     Firefox 自己的库里存的是秒，但从 Chrome / Edge 导入过来的 cookie 存的是**毫秒**
-    （实测一份 RunningCheese 的库里，52pojie 的 cookie 过期时间算出来是 57552 年后）。
+    （实测一份 RunningCheese 的库里，有的 cookie 过期时间算出来是 57552 年后）。
     17 位量级（> 1e11）只可能是毫秒，直接除以 1000。
     """
     if not value or value <= 0:
@@ -526,7 +525,7 @@ def main(argv=None) -> int:
     parser.add_argument("--remember", action="store_true", help="用 Windows DPAPI 记住口令，之后免输")
     parser.add_argument("--profile", help="Firefox profile 目录，或直接给 cookies.sqlite 路径")
     parser.add_argument("--from-json", help="改读 Cookie-Editor 等扩展导出的 JSON（Edge/Chrome 走这条）")
-    parser.add_argument("--sites", help="只同步这些站点，逗号分隔，如 pojie,kafan")
+    parser.add_argument("--sites", help="只同步这些站点，逗号分隔，如 kafan,linuxdo")
     parser.add_argument("--dry-run", action="store_true", help="只显示会推什么，不发送")
     parser.add_argument("--check", action="store_true", help="推送后让 NAS 立刻验证登录态")
     parser.add_argument("--list", action="store_true", help="列出本机 Firefox profile")

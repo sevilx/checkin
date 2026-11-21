@@ -10,7 +10,6 @@ from .kafan import Kafan
 from .linuxdo import LinuxDo
 from .nodeseek import NodeSeek
 from .pan946 import Pan946
-from .pojie import Pojie
 from .right import EnShan
 from .smzdm import Smzdm
 from .tekqart import Tekqart
@@ -29,7 +28,6 @@ SITES = [
     Cloud189,
     LinuxDo,
     WnflbForum,
-    Pojie,
     Kafan,
     EnShan,
     Pan946,

@@ -26,7 +26,7 @@ FILENAME = "cookies.json"
 VERSION = 1
 
 # 超过这个时长的同步记录在面板上标黄：多数论坛的会话 cookie 撑不过一两天。
-# 瑞数（52pojie）/ Cloudflare 站点尤其短，这里取一个通用的偏保守值。
+# 瑞数 / Cloudflare 站点尤其短，这里取一个通用的偏保守值。
 STALE_HOURS = 48
 
 

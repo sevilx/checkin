@@ -16,7 +16,7 @@ RUN apt-get update \
 RUN pip3 install --no-cache-dir --break-system-packages "curl_cffi>=0.7.0" \
     || echo "WARN: curl_cffi 安装失败，Cloudflare 站点可能被拦，见 README 常见问题"
 
-# PySocks：requests 分支站点（吾爱 / 恩山 / V2EX）用 socks5h:// 代理时必须装，
+# PySocks：requests 分支站点（恩山 / V2EX）用 socks5h:// 代理时必须装，
 # 缺了它 requests 会静默忽略 socks 代理。失败同样不阻塞构建。
 RUN pip3 install --no-cache-dir --break-system-packages "PySocks>=1.7.1" \
     || echo "WARN: PySocks 安装失败，requests 分支站点无法使用 socks 代理"

@@ -3,7 +3,7 @@
 签到脚本唯一脆弱的环节，从来不是"怎么点那个按钮"，而是"凭什么证明你是你"。
 
 绝大多数论坛的登录态就是一段 cookie。这段 cookie 有保质期：普通 Discuz 站点通常
-几周，LinuxDo 这类 Discourse 一两周，而挂了瑞数（52pojie）或 Cloudflare 严格模式的，
+几周，LinuxDo 这类 Discourse 一两周，而挂了瑞数或 Cloudflare 严格模式的，
 几小时到一天就要换。所以真正要解决的问题是 —— **让 NAS 上那份 cookie 一直是最新的**，
 而不是"让 NAS 自己会登录"。
 
@@ -23,7 +23,7 @@
 | --- | --- | --- |
 | LinuxDo | `_t` | 是 |
 | NodeSeek | `session` | 是 |
-| 52pojie（`htVC_2132_auth`）/ 卡饭（`r6pb_69df_auth`）/ 福利吧（`S5r8_2132_auth`） | 各站前缀不同，认 `_auth` 后缀 | 是 |
+| 卡饭（`r6pb_69df_auth`）/ 福利吧（`S5r8_2132_auth`）/ 恩山（`rHEX_2132_auth`） | 各站前缀不同，认 `_auth` 后缀 | 是 |
 | V2EX | `A2` | 是 |
 
 从 `document.cookie` 拿到的是一份"看着有、实际登不进去"的残缺 cookie，
@@ -53,7 +53,7 @@ python tools/sync_cookies.py --nas http://192.168.1.10:8181 --remember
 匹配到 6 个站点：
   KAFAN      5 个字段 213 字节，会话级 cookie
   LINUXDO    3 个字段 148 字节，最早 2026-11-16T10:22:31 过期
-  POJIE      6 个字段 342 字节，最早 2026-11-02T23:10:04 过期
+  FNNASCLUB  4 个字段 176 字节，最早 2026-11-20T08:10:04 过期
   ...
   [OK]   已写入 6 个站点（2026-11-02T20:51:04）
 ```
@@ -86,12 +86,11 @@ python tools/sync_cookies.py --profile "D:\Program Files (x86)\RunningCheeseFire
 Firefox 自己的库里 `expiry` 存的是**秒**。但如果这个 profile 曾经从 Chrome / Edge
 导入过 cookie（RunningCheese 用户很常见），那些 cookie 的 `expiry` 是**毫秒**。
 
-结果就是：52pojie 的 cookie 算出来的过期时间是「57552 年后」，
+结果就是：某些站点的 cookie 算出来的过期时间是「57552 年后」，
 `time.localtime()` 直接抛 `OSError: [Errno 22] Invalid argument`，整个同步崩掉。
 
 脚本现在的处理是：超过 `1e11`（17 位量级）的一律当毫秒，除以 1000。
-顺带的好处是，那些「看起来还有 5 万年、实际早就过期」的残留 cookie 会被正确剔除
-（实测一个库里 POJIE 从 19 个字段降到 15 个，剔掉的都是死数据）。
+顺带的好处是，那些「看起来还有 5 万年、实际早就过期」的残留 cookie 会被正确剔除。
 
 ### 域名映射
 
@@ -105,7 +104,6 @@ Firefox 自己的库里 `expiry` 存的是**秒**。但如果这个 profile 曾�
 | LINUXDO | `linux.do` |
 | FNNASCLUB | `fnnas.com` |
 | WNFLB | `wnflb2023.com` |
-| POJIE | `52pojie.cn` |
 | KAFAN | `kafan.cn` |
 
 TY189 不在列表里：天翼云盘走账密 + `cloud189-sdk` 登录，和浏览器会话无关。
@@ -156,27 +154,11 @@ schtasks /Create /TN "checkin-cookie-sync" /SC DAILY /ST 08:50 ^
 一个现实的限制：**如果你一整天没开浏览器，cookie 也可能过期**。
 好在服务端通常会滑动续期 —— 只要隔天打开一次这些站，有效期就一直往后滚。
 
-### 吾爱破解：只有高频同步才救得回来
-
-52pojie 的瑞数凭证（`wzws_cid`）**几十分钟就失效**，比 Discuz 的登录票据短两个数量级。
-所以它不能靠"每天同步一次"，得改成时常刷：
-
-```cmd
-schtasks /Create /TN "checkin-cookie-sync" /SC MINUTE /MO 20 ^
-  /TR "python C://path//to//checkin-hub//tools//sync_cookies.py --nas http://192.168.1.10:8181 --sites pojie"
-```
-
 配一次 `--remember` 存好口令，之后这个任务全程不用交互：
 
 ```cmd
 python tools\sync_cookies.py --nas http://192.168.1.10:8181 --remember
 ```
-
-前提是**你平时会开浏览器逛吾爱**。Firefox 只有在真正访问站点时才会重新计算挑战、
-刷新 `wzws_cid`；后台挂着不访问，cookie 库里的凭证一样是旧的。
-
-判断有没有效，看面板「设置」页的 Cookie 同步卡片：`POJIE` 那行的时间戳如果一直停在几小时前，
-说明浏览器没再访问过吾爱，同步推上去的自然是旧凭证。
 
 ---
 
@@ -248,7 +230,7 @@ Stagehand 是 Browserbase 做的开源框架，卖点是"用自然语言操作�
 
 ### 瑞数（WZWS）为什么绕不过去
 
-52pojie 挂的不是 Cloudflare，是瑞数。两者拦人的方式完全不同：
+有些站点（如恩山）挂的不是 Cloudflare，是瑞数。两者拦人的方式完全不同：
 
 * **Cloudflare** 看 TLS 握手指纹（JA3/JA4）+ HTTP/2 帧特征 → 换 `curl_cffi` 的
   `impersonate="chrome"` 就能过，这也是 NodeSeek、LinuxDo 现在的做法
@@ -256,8 +238,7 @@ Stagehand 是 Browserbase 做的开源框架，卖点是"用自然语言操作�
   它不看你的 TLS 长什么样，看你**算不算得出来**
 
 前者是"你长得像不像浏览器"，后者是"你会不会做这道题"。所以纯 HTTP 客户端对它没辙，
-GitHub 上那几个 52pojie 签到脚本（包括 `jwmycz/py52pojie` 的 `waf.js`）现在全部失效，
-原因都是瑞数换了挑战算法、依赖的参数已经不存在了。
+网上那些针对瑞数的签到脚本也普遍随着挑战算法升级而失效。
 
 真要每天稳定过瑞数，只有两条路：跑真浏览器，或者用真浏览器换来的 cookie。
 后者的成本是零。
@@ -289,7 +270,7 @@ GitHub 上那几个 52pojie 签到脚本（包括 `jwmycz/py52pojie` 的 `waf.js
 **Q：一个站有多个账号怎么办？**
 
 同步只覆盖**第一个**账号的 cookie。第二个账号仍然用 `_2` 后缀写在 `.env` 里
-（`POJIE_COOKIE_2=...`），或者干脆用第二个浏览器 profile 跑一次 `--profile` 指定。
+（`KAFAN_COOKIE_2=...`），或者干脆用第二个浏览器 profile 跑一次 `--profile` 指定。
 
 **Q：不想在电脑上装 Python？**
 
