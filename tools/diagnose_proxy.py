@@ -6,12 +6,12 @@
 
 用法（在 NAS 的 checkin 容器里执行）：
 
-    docker exec -it checkin python tools/diagnose_proxy.py \
+    docker exec -it checkin python3 tools/diagnose_proxy.py \
         --proxy '<scheme>://<host>:<port>'
 
     # 用环境变量传，避免命令行里出现代理串
     docker exec -e DIAG_PROXY='<scheme>://<host>:<port>' checkin \
-        python tools/diagnose_proxy.py
+        python3 tools/diagnose_proxy.py
 
     # <scheme> 可为 socks5h://（域名交给代理解析）/ socks5:// / http:// / https://
     # 未传 --proxy 时依次读 DIAG_PROXY、GLOBAL_PROXY；两者都空则按直连诊断。
