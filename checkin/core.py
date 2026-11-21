@@ -68,16 +68,25 @@ XHR_HEADERS = {
     "Sec-Fetch-Site": "same-origin",
 }
 
-# Cloudflare / WAF 拦截页的特征串
-_BLOCK_MARKERS = (
-    "just a moment",
-    "attention required",
+# Cloudflare / WAF 拦截页的特征串，按特异性分成两组。
+# 高特异性：这些词几乎只出现在 CF 的挑战 / 拦截页里，即使 CF 把拦截页的响应码
+# 自定义成 404 也能认出来；正常站点的 404 / 200 正文不会命中。
+_HIGH_SPECIFIC_BLOCK_MARKERS = (
     "cf-error-details",
-    "cf_chl_opt",
-    "cloudflare",
+    "attention required",
+    "just a moment",
     "enable javascript and cookies",
+    "cf_chl_opt",
+    "cf_clearance",
+)
+# 弱标记：普通站点的正常 404 页也可能写着 "cloudflare" / "access denied"，
+# 因此只在原本就异常的状态码（403/429/503）下才纳入判据，避免误伤。
+_WEAK_BLOCK_MARKERS = (
+    "cloudflare",
     "access denied",
 )
+# 保留原名字，含义 = 高特异性 + 弱标记，供其它模块/脚本复用。
+_BLOCK_MARKERS = _HIGH_SPECIFIC_BLOCK_MARKERS + _WEAK_BLOCK_MARKERS
 
 
 # 绑定到「出口 IP + User-Agent」的 Cloudflare 会话 cookie。
@@ -100,6 +109,17 @@ def looks_blocked(status: int, text: str, headers=None) -> bool:
 
     `cf-mitigated: challenge` 是 Cloudflare 自己打的标记，比正文关键字可靠得多，
     优先级最高。
+
+    正文标记检测与状态码门控**解耦**：Cloudflare 允许把拦截页的响应码自定义成 404
+    （常伴随 cf-ray / server: cloudflare 头）。旧逻辑只在 403/429/503 时查正文，
+    404 挑战页会被当成"正常响应"直接放行 —— browser_request 于是不换指纹，
+    linuxdo._guard 再误报成 "_t 失效"，用户就会反复重登 cookie。
+
+    因此对 404 这类原本被视为"正常"的状态码，仍用高特异性标记
+    （cf-error-details / attention required / just a moment / cf_chl_opt 等）识别拦截；
+    弱词 "cloudflare" / "access denied" 只留在 403/429/503 分支，避免误伤普通站点的
+    正常 404。Discourse 对未登录的 /session/current.json 回的 404 是 JSON
+    （含 current_user / error_type，无任何 CF 标记），不会被判成拦截。
     """
     if headers is not None:
         try:
@@ -107,10 +127,14 @@ def looks_blocked(status: int, text: str, headers=None) -> bool:
                 return True
         except Exception:  # noqa: BLE001
             pass
-    if status not in (403, 429, 503):
-        return False
     body = (text or "")[:4000].lower()
-    return any(marker in body for marker in _BLOCK_MARKERS)
+    # 高特异性标记：任何状态码（含 404）命中即判拦截
+    if any(marker in body for marker in _HIGH_SPECIFIC_BLOCK_MARKERS):
+        return True
+    # 弱标记只在原本就异常的状态码下生效，避免误伤正常 404 / 200 页面
+    if status in (403, 429, 503):
+        return any(marker in body for marker in _BLOCK_MARKERS)
+    return False
 
 
 def cookie_string(cookies: dict[str, str]) -> str:
@@ -229,11 +253,19 @@ class Site:
         )
 
         if browser and cffi_requests is not None:
+            # 各版本 curl_cffi 对"构造后再赋值 proxies"的支持不一致，
+            # 构造时传 proxies= 更稳；无代理时不传这个参数。
+            proxy_map = {"http": str(proxy), "https": str(proxy)} if proxy else None
             try:
-                sess = cffi_requests.Session(impersonate=browser)
-            except TypeError:  # 老版本 curl_cffi 不认构造参数，退一步用属性设置
+                if proxy_map:
+                    sess = cffi_requests.Session(impersonate=browser, proxies=proxy_map)
+                else:
+                    sess = cffi_requests.Session(impersonate=browser)
+            except TypeError:  # 老版本不认构造参数 / proxies=，退回属性设置
                 sess = cffi_requests.Session()
                 sess.impersonate = browser
+                if proxy_map:
+                    sess.proxies = proxy_map
             extra: dict[str, str] = _fingerprint_headers(headers, browser)
             if raw:
                 # 指纹模式下不用 cookie jar，直接给 Cookie 头：
@@ -241,8 +273,9 @@ class Site:
                 extra["Cookie"] = raw
             if extra:
                 sess.headers.update(extra)
-            if proxy:
-                sess.proxies = {"http": str(proxy), "https": str(proxy)}
+            if proxy_map:
+                # 幂等兜底：构造时已传入再设一次也无害，兼容只认属性赋值的版本。
+                sess.proxies = dict(proxy_map)
             return sess
 
         s = requests.Session()
@@ -305,6 +338,9 @@ class Site:
             except Exception as exc:  # noqa: BLE001
                 last_exc = exc
                 continue
+            # looks_blocked 已对 404 解耦：CF 自定义 404 挑战页也会记进 blocked，
+            # 于是继续换下一个指纹；三种指纹全被拦时统一走下面的 cf_hint，
+            # 不再让 404 直接放行、被上层误读成 "_t 失效"。
             if looks_blocked(resp.status_code, resp.text, resp.headers):
                 blocked.append((imp or "requests", resp.status_code))
                 continue

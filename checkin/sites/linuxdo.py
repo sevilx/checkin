@@ -27,7 +27,7 @@ import random
 import re
 import time
 
-from ..core import Line, Site, XHR_HEADERS, parse_cookie
+from ..core import Line, Site, XHR_HEADERS, looks_blocked, parse_cookie
 
 BASE = "https://linux.do"
 MAX_BROWSE = 10
@@ -58,6 +58,46 @@ def _duration(seconds: int) -> str:
     if hours:
         return f"{hours} 小时 {mins} 分"
     return f"{max(mins, 1)} 分钟"
+
+
+def _cf_blocked(resp) -> bool:
+    """401/403/404 里区分「Cloudflare 挑战页」和「站点正常拒绝」。
+
+    core.looks_blocked() 已覆盖 cf-mitigated: challenge 与高特异性正文标记（对 404 也生效）。
+    这里再补一层响应头兜底：CF 允许把拦截页自定义成 404，但正常走 CF 的 Discourse 404
+    也会带 cf-ray / server: cloudflare，所以这两个头不能单独当判据 —— 正文一眼是
+    正常未登录 JSON（current_user / error_type）时就按站点正常拒绝处理。
+    """
+    if looks_blocked(
+        getattr(resp, "status_code", 0),
+        getattr(resp, "text", "") or "",
+        getattr(resp, "headers", None),
+    ):
+        return True
+    headers = getattr(resp, "headers", None) or {}
+    try:
+        ray = str(headers.get("cf-ray") or "")
+        server = str(headers.get("server") or "").lower()
+        mitigated = str(headers.get("cf-mitigated") or "")
+    except Exception:  # noqa: BLE001
+        ray, server, mitigated = "", "", ""
+    body = (getattr(resp, "text", "") or "")[:4000].lower()
+    if "current_user" in body or "error_type" in body:
+        return False
+    return bool(ray or mitigated) or "cloudflare" in server
+
+
+def _cf_block_message(status: int) -> str:
+    """与挑战性质匹配的可操作提示（复用 core.cf_hint 的思路，但不说 _t 失效）。"""
+    return (
+        f"登录校验被 Cloudflare / WAF 挑战（HTTP {status}，CF 可能用 404 当拦截页）。"
+        "这不是登录令牌失效，别反复重登 cookie：\n"
+        "1) 出口 IP 最要紧：给这个站点配一条和浏览器同一个出口（同一节点、同一公网 IP）的代理，"
+        "节点不干净就换一个；\n"
+        "2) 不要把浏览器里的 cf_clearance 抄进来：它和当时的出口 IP、UA 绑定，换节点必然失效，"
+        "本程序默认已经帮你丢掉；\n"
+        "3) 容器里代理可能没生效，可用 tools/diagnose_proxy.py 先看连通性和出口 IP。"
+    )
 
 
 class LinuxDo(Site):
@@ -402,6 +442,11 @@ class LinuxDo(Site):
         if resp.status_code == 200:
             return
         if resp.status_code in (401, 403, 404):
+            # 双保险：A 层（browser_request / looks_blocked）通常在 404 挑战页处就换指纹
+            # 并抛 cf_hint 了；万一漏判，这里按响应头 / 正文再判一次，
+            # 别把出口 IP 被挑战说成 "_t 失效"。
+            if _cf_blocked(resp):
+                raise RuntimeError(_cf_block_message(resp.status_code))
             # Discourse 对未登录的 /session/current.json 回 404，不是"接口不存在"
             if not self.has_token:
                 raise RuntimeError(
@@ -439,6 +484,9 @@ class LinuxDo(Site):
             if user.get("username"):
                 return True, f"Cookie 有效：{user['username']}（信任等级 {user.get('trust_level', '?')}）"
             return False, "接口能访问但没有登录态，Cookie 已失效"
-        if resp.status_code in (403, 404):
+        if resp.status_code in (401, 403, 404):
+            # 和 _guard 同样的双保险：CF 自定义 404 挑战页不能说成 cookie 失效
+            if _cf_blocked(resp):
+                return False, _cf_block_message(resp.status_code)
             return False, "Cookie 已失效（未登录）"
         return False, f"检测失败：HTTP {resp.status_code}"

@@ -1,4 +1,8 @@
 requests>=2.31.0
+# requests 分支的站点（吾爱 / 恩山 / V2EX）配 socks5h:// 代理时必须装 PySocks。
+# 缺了它 requests 会静默忽略 socks 代理，看起来像"配了代理却没走代理"；
+# LinuxDo 走 curl_cffi 分支不受影响，但其它站点受影响。
+PySocks>=1.7.1
 # 可选但强烈建议装：curl_cffi 用 BoringSSL 复刻 Chrome / Safari 的 TLS 与 HTTP/2 指纹，
 # NodeSeek、LinuxDo 这类挂在 Cloudflare 后面的站点靠它才能稳定通过。
 # 装不上也能跑，只是这些站点更容易被 403。
