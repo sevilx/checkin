@@ -5,7 +5,7 @@
 - **GitHub Actions**：不用服务器，Fork 一份、填几个 Secret，每天定时跑完给你发通知
 - **NAS / Docker**：容器里常驻，带网页面板，能看每个站点的结果和历史，还能点一下手动签到
 
-支持 13 个站点，核心只依赖 `requests`（`curl_cffi` 为可选，用来过 Cloudflare），浏览器面板用 Python 标准库实现，不装任何 Web 框架。
+支持 16 个站点，核心只依赖 `requests`（`curl_cffi` 为可选，用来过 Cloudflare），浏览器面板用 Python 标准库实现，不装任何 Web 框架。
 
 ---
 
@@ -27,10 +27,13 @@
 | 恩山无线论坛 | Cookie（含 `rHEX_2132_auth`、`rHEX_2132_saltkey`、`wzws_cid`） | Discuz `erling_qd` 插件签到（要现取 `formhash`）；已加瑞数防护，凭证与机房 IP 不友好，建议家宽跑 |
 | 盘就是六 | 邮箱 + 密码，或 Cookie（`bbs_uid`、`bbs_token`） | Xiuno BBS，`POST my-sign.htm` 签到；支持账号密码每日自动登录，不用同步 cookie |
 | 品技论坛 | Cookie（含 `XnMp_2132_auth`、`XnMp_2132_saltkey`） | Discuz `zqlj_sign` 天天打卡：页面现取 8 位 `sign` 再 GET；Cloudflare 站点，自动换指纹 |
+| HDWinG | Cookie（含 `hdchina`） | NexusPHP 风格签到：首页现取 `x-csrf`，`POST plugin_sign-in.php?cmd=signin`，读 JSON 的 `state`/`signindays`/`integral`；挂 Cloudflare，自动换指纹、默认丢弃 `cf_clearance` |
+| CHDBits | Cookie（含 `c_secure_uid`、`c_secure_pass`） | NexusPHP 答题签到，入口 `bakatest.php`：现取随机 `questionid`，固定点「不会」稳妥 +5 魔力，不答题、不预置答案，绝不答错扣分 |
 
-> NodeSeek、LinuxDo、V2EX、品技论坛都挂在 Cloudflare 后面，**机房 IP 或频繁换 IP 的代理容易被拦成 403**。
+> NodeSeek、LinuxDo、V2EX、品技论坛、HDWinG 都挂在 Cloudflare 后面，**机房 IP 或频繁换 IP 的代理容易被拦成 403**。
 > 程序会用 `curl_cffi` 模仿真实浏览器的 TLS 指纹、并在被拦时自动换几种指纹重试，
-> 同时把「被拦截」和「cookie 失效」分开提示，不会让你白白重配 cookie。处理办法见 [FAQ](#faq)。
+> 同时把「被拦截」和「cookie 失效」分开提示，不会让你白白重配 cookie。
+> HDWinG 若确认 NAS 与浏览器同出口仍被挑战，可单独配 `keep_cf=1` + `ua`；处理办法见 [FAQ](#faq)。
 
 同时具备：
 
@@ -92,6 +95,9 @@ Fork 出来的仓库默认不跑工作流。进 **Actions** 标签，看到提�
 | `PAN946_COOKIE` | 盘就是六 Cookie（含 `bbs_uid`、`bbs_token`），不想填密码时用 |
 | `TEKQART_COOKIE` | 品技论坛 Cookie（含 `XnMp_2132_auth`、`XnMp_2132_saltkey`） |
 | `TEKQART_KEEP_CF` / `TEKQART_UA` | 可选：出口被 Cloudflare 挑战时才用，设 `1` 保留浏览器 `cf_clearance`，并把当时的浏览器 UA 填进 `TEKQART_UA`（两者必须配对） |
+| `HDWING_COOKIE` | HDWinG Cookie（含 `hdchina`；不是 `c_secure_uid` 那套） |
+| `HDWING_KEEP_CF` / `HDWING_UA` | 可选：只有容器和浏览器**同出口**且被 CF 挑战时才设 `1`，并把当时浏览器 UA 填进 `HDWING_UA` |
+| `CHDBITS_COOKIE` | CHDBits Cookie（含 `c_secure_uid`、`c_secure_pass`）；签到固定点「不会」 |
 | `TY189_USERNAME` / `TY189_PASSWORD` | 天翼账号 + 密码 |
 | 推送渠道 | 见[推送通知](#推送通知)，至少配一组，不配就只写日志 |
 
@@ -580,7 +586,7 @@ GLOBAL_PROXY=http://192.168.1.2:7890
 | **改代理** | 全局代理 + 每个站点单独代理，就近生效；账号级代理在账号里填 |
 | **检查 cookie 是否有效** | 点「检测」，只发只读请求，不会顺手签到。结果分三种：✅ 有效（带昵称）/ ❌ 已失效 / ⚠️ 无法确认（网络不通或接口变了，不会误报失效） |
 
-**能一键检测的站点**：百度网盘、哔哩哔哩、百度贴吧、V2EX、LinuxDo。
+**能一键检测的站点**：百度网盘、哔哩哔哩、百度贴吧、V2EX、LinuxDo、HDWinG、CHDBits。
 
 其余四个（什么值得买、飞牛论坛、NodeSeek、189）没有稳定可靠的只读接口，按钮是灰的，显示"该站点暂不支持在线检测" —— 与其返回一个假结论，不如直说。这几个站点点一次「立即签到」就能从结果判断凭据好坏。
 

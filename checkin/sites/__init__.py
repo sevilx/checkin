@@ -4,8 +4,10 @@ from __future__ import annotations
 
 from .baidupan import BaiduPan
 from .bilibili import Bilibili
+from .chdbits import CHDBits
 from .cloud189 import Cloud189
 from .fnnas import FnNasClub
+from .hdwing import HDWinG
 from .kafan import Kafan
 from .linuxdo import LinuxDo
 from .nodeseek import NodeSeek
@@ -32,6 +34,8 @@ SITES = [
     EnShan,
     Pan946,
     Tekqart,
+    HDWinG,
+    CHDBits,
 ]
 
 BY_KEY = {site.key.lower(): site for site in SITES}

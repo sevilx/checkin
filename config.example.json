@@ -6,6 +6,8 @@
   "_kafan_说明": "卡饭是 GBK 站点，签到为登录即自动完成，本项主要确认今天签没签",
   "_enshan_说明": "恩山是 Discuz X3.5 + erling_qd 插件，签到要带页面里的 formhash；机房 IP 常被 WAF 拦（521），建议在家宽 NAS 上跑",
   "_pan946_说明": "盘就是六是 Xiuno BBS，签到接口是 POST my-sign.htm（空 body 返回 JSON）。填 email + password 即可每天自动登录，不用同步 cookie；只填 cookie 也能用，但会随着登录票据过期而失效",
+  "_hdwing_说明": "HDWinG 是 NexusPHP 风格签到：POST plugin_sign-in.php?cmd=signin，csrf 每次从首页 meta 现取；登录票据是 hdchina（不是 c_secure_*）。站点挂 Cloudflare，默认丢弃 cf_clearance；只有 NAS 和浏览器同出口时才把 keep_cf 设为 1，并把当时的浏览器 UA 填进 ua（两者必须配对，否则别开）",
+  "_chdbits_说明": "CHDBits 是 NexusPHP 答题签到，入口是 bakatest.php（不是 attendance.php）；题目随机、纯 HTTP 无法可靠作答，程序固定点「不会」(wantskip) 稳妥拿 5 魔力，不答题、不预置答案。cookie 要含 c_secure_uid 和 c_secure_pass",
   "BAIDUWP": [],
   "BILIBILI": [],
   "FNNASCLUB": [],
@@ -55,6 +57,18 @@
       "cookie": "",
       "keep_cf": 0,
       "ua": ""
+    }
+  ],
+  "HDWING": [
+    {
+      "cookie": "",
+      "ua": "",
+      "keep_cf": 0
+    }
+  ],
+  "CHDBITS": [
+    {
+      "cookie": ""
     }
   ]
 }
