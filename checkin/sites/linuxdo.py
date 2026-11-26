@@ -36,6 +36,12 @@ MAX_LIKE = 5
 # 门槛设太高一整天都不会触发（开关就白开了），所以按"确实花掉了这些时间"取 400ms。
 MIN_REPORT_MS = 400
 
+# 用户实测：RunningCheese Firefox 160，x64，prefs.js / user.js 均无 UA 伪装。
+# keep_cf=1 时 cf_clearance 与换它的浏览器 UA 绑定，这个串作为提示里的精确参考值。
+LINUXDO_UA_EXAMPLE = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:160.0) Gecko/20100101 Firefox/160.0"
+)
+
 
 def _int(value, default: int = 0, lo: int = 0, hi: int = 0) -> int:
     try:
@@ -87,16 +93,30 @@ def _cf_blocked(resp) -> bool:
     return bool(ray or mitigated) or "cloudflare" in server
 
 
-def _cf_block_message(status: int) -> str:
-    """与挑战性质匹配的可操作提示（复用 core.cf_hint 的思路，但不说 _t 失效）。"""
+def _cf_block_message(status: int, kept_cf: bool = False) -> str:
+    """与挑战性质匹配的可操作提示（复用 core.cf_hint 的思路，但不说 _t 失效）。
+
+    kept_cf 决定第 2 条怎么说：keep_cf=1 时 cf_clearance 其实被保留了，
+    再写"本程序默认已经帮你丢掉"就是自相矛盾，必须改成核对 UA / 出口。
+    """
+    if kept_cf:
+        second = (
+            "2) 你开了 keep_cf=1，cf_clearance 被保留了：请核对 ua 是否填了当时那个浏览器的 UA"
+            f"（RunningCheese Firefox 160 可参考 {LINUXDO_UA_EXAMPLE}），"
+            "且容器出口是否和浏览器一致；两项对不上会被 CF 挑战；\n"
+        )
+    else:
+        second = (
+            "2) 不要把浏览器里的 cf_clearance 抄进来：它和当时的出口 IP、UA 绑定，换节点必然失效，"
+            "本程序默认已经帮你丢掉；\n"
+        )
     return (
         f"登录校验被 Cloudflare / WAF 挑战（HTTP {status}，CF 可能用 404 当拦截页）。"
         "这不是登录令牌失效，别反复重登 cookie：\n"
         "1) 出口 IP 最要紧：给这个站点配一条和浏览器同一个出口（同一节点、同一公网 IP）的代理，"
         "节点不干净就换一个；\n"
-        "2) 不要把浏览器里的 cf_clearance 抄进来：它和当时的出口 IP、UA 绑定，换节点必然失效，"
-        "本程序默认已经帮你丢掉；\n"
-        "3) 容器里代理可能没生效，可用 tools/diagnose_proxy.py 先看连通性和出口 IP。"
+        + second
+        + "3) 容器里代理可能没生效，可用 tools/diagnose_proxy.py 先看连通性和出口 IP。"
     )
 
 
@@ -120,6 +140,7 @@ class LinuxDo(Site):
         super().__init__(account, index)
         cookies = parse_cookie(self.cookie)
         self.has_token = bool(cookies.get("_t"))
+        self.has_cf_clearance = bool(cookies.get("cf_clearance"))
         if not self.has_token and not cookies.get("_forum_session"):
             raise ValueError(
                 "Cookie 里既没有 _t 也没有 _forum_session，复制到的不是 linux.do 的 Cookie："
@@ -138,9 +159,54 @@ class LinuxDo(Site):
             kept_cf,
         )
 
+    def _cf_precheck(self, kept_cf: bool) -> None:
+        """keep_cf=1 保留了 cf_clearance 却没填 ua 时，在发请求前明确拦下。
+
+        core.cf_cookies() 在 keep_cf=1 且 Cookie 含 cf_clearance 时返回 kept_cf=True，
+        core.cf_headers() 却只在 ua 非空时才注入 User-Agent。ua 空 → 请求带着
+        curl_cffi 指纹自带的 UA（safari/chrome），和当初换 cf_clearance 的浏览器对不上，
+        必然被 CF 挑战（常见 404 拦截页）。这是"配置漏填 + 程序无声失败"，
+        不该让注定失败的请求发出去再给泛泛的 CF 提示。
+
+        kept_cf=False 已涵盖 keep_cf=0、ua 已填以外"没有 cf_clearance 可用"的边界；
+        本方法只在 kept_cf=True 且 ua 为空时触发，其他情况一律静默走原流程。
+        """
+        ua = str(self.account.get("ua") or "").strip()
+        if not (kept_cf and not ua):
+            return
+        raise RuntimeError(
+            "配置矛盾：你开了 keep_cf=1，Cookie 里保留了 cf_clearance，但 ua 没填。\n"
+            "cf_clearance 与当初换它的浏览器 UA 绑定；程序只在 ua 非空时才会把 UA 注入请求。"
+            "ua 空时请求带的是 curl_cffi 指纹自带的 UA（safari/chrome），和浏览器对不上，"
+            "必然被 Cloudflare 挑战（常见 404 拦截页），所以这次请求没有发出。\n"
+            "两条出路，二选一：\n"
+            "(a) 把换 cf_clearance 那个浏览器的 UA 填进 ua 字段；"
+            f"若用的是 RunningCheese Firefox 160，可填：{LINUXDO_UA_EXAMPLE}\n"
+            "(b) 若无法保证容器出口 IP 和浏览器一致、也无法确认 UA，就把 keep_cf 关掉（设为 0）："
+            "程序会退回丢弃 cf_clearance + 多指纹尝试；但出口不干净时仍可能被挑战。"
+        )
+
+    def cf_hint(self, blocked: list[tuple[str, int]]) -> str:
+        """站点层补齐 core 通用提示：keep_cf=1 时"默认已丢掉"那句不适用。
+
+        不改 core.cf_hint() 的通用行为，只在 LinuxDo 且确实保留了 cf_clearance 时
+        追加一条说明，避免 browser_request 层被拦截时提示自相矛盾。
+        """
+        hint = super().cf_hint(blocked)
+        keep = str(self.account.get("keep_cf") or "").strip().lower() in ("1", "true", "yes", "on")
+        if not (keep and self.has_cf_clearance):
+            return hint
+        return (
+            hint
+            + "\n[keep_cf=1 注意] 本次实际保留了 cf_clearance 并使用了 ua 字段里的 UA；"
+            "上面 core 通用提示里“默认已丢掉 cf_clearance”那句对你不适用。"
+            "请核对 ua 与换 cf_clearance 的浏览器是否一致、容器出口 IP 是否和浏览器一致。"
+        )
+
     # ------------------------------------------------------------------ #
     def run(self) -> list[Line]:
         cookie_str, kept_cf = self.cf_cookies()
+        self._cf_precheck(kept_cf)
         headers = self._headers(kept_cf)
 
         current, session = self.browser_request(
@@ -148,7 +214,7 @@ class LinuxDo(Site):
             cookie=cookie_str,
             headers=headers,
         )
-        self._guard(current)
+        self._guard(current, kept_cf)
 
         try:
             user = (current.json() or {}).get("current_user") or {}
@@ -431,13 +497,15 @@ class LinuxDo(Site):
         return out
 
     # ------------------------------------------------------------------ #
-    def _guard(self, resp) -> None:
+    def _guard(self, resp, kept_cf: bool = False) -> None:
         """把非 200 的结果翻译成能照做的动作；风控拦截已由 browser_request 提前抛掉。
 
         403/404 不能一律说成 "_t 失效"：Discourse 对未登录的 /session/current.json
         本来就回 404，而挂在 Cloudflare 后的 linux.do 在出口 IP 被挑战时，接口也会
         回 403/404。真正 "_t 失效" 只是其中一种可能，得先看是不是出口/凭证的问题，
         否则用户会反复重登 cookie，问题却一直不解决。
+
+        kept_cf 用来让 CF 会话那条提示和实际行为一致：保留时不说"默认已丢掉"。
         """
         if resp.status_code == 200:
             return
@@ -446,7 +514,7 @@ class LinuxDo(Site):
             # 并抛 cf_hint 了；万一漏判，这里按响应头 / 正文再判一次，
             # 别把出口 IP 被挑战说成 "_t 失效"。
             if _cf_blocked(resp):
-                raise RuntimeError(_cf_block_message(resp.status_code))
+                raise RuntimeError(_cf_block_message(resp.status_code, kept_cf))
             # Discourse 对未登录的 /session/current.json 回 404，不是"接口不存在"
             if not self.has_token:
                 raise RuntimeError(
@@ -456,14 +524,24 @@ class LinuxDo(Site):
                 )
             # 有 _t 却被拒：优先怀疑出口 IP / CF 会话，而不是又让用户去重登。
             # 只有当确实没有 cf_clearance 可用、且出口这一层已排除时，才指向 _t 本身。
+            if kept_cf:
+                cf_session_hint = (
+                    "2) CF 会话：你开了 keep_cf=1，cf_clearance 被保留了、ua 也已填；"
+                    "请核对 ua 是否为当时那个浏览器的 UA、容器出口 IP 是否和浏览器一致"
+                    "（cf_clearance 与这两项绑定）；\n"
+                )
+            else:
+                cf_session_hint = (
+                    "2) CF 会话：浏览器里 cf_clearance 是在你的出口换来的，默认已被本程序丢掉。"
+                    "若确认容器和浏览器同出口，可在设置里把 keep_cf=1 打开，并把当时那个浏览器的 UA 填进 ua"
+                    "（两者必须配对；出口不一致时千万别开，会更像伪造）；\n"
+                )
             raise RuntimeError(
                 f"登录校验被拒（HTTP {resp.status_code}）。有 _t 但接口不认，按可能性从高到低排查：\n"
                 "1) 出口 IP：如果你在 NAS 上走了代理 / 机场节点，Cloudflare 会认出口——"
                 "先给这个站点配一条和浏览器同一个出口（同一节点、同一公网 IP）的代理再试；\n"
-                "2) CF 会话：浏览器里 cf_clearance 是在你的出口换来的，默认已被本程序丢掉。"
-                "若确认容器和浏览器同出口，可在设置里把 keep_cf=1 打开，并把当时那个浏览器的 UA 填进 ua"
-                "（两者必须配对；出口不一致时千万别开，会更像伪造）；\n"
-                "3) 排除以上两步后仍不行，才是 _t 本身失效：改密码 / 手动退出 / 换设备都会让它失效，"
+                + cf_session_hint
+                + "3) 排除以上两步后仍不行，才是 _t 本身失效：改密码 / 手动退出 / 换设备都会让它失效，"
                 "重新登录一次再复制完整 Cookie。"
             )
         raise RuntimeError(f"登录校验失败 HTTP {resp.status_code}")
@@ -471,6 +549,7 @@ class LinuxDo(Site):
     def verify(self) -> tuple[bool, str]:
         """只读检测：Discourse 的 /session/current.json，返回 current_user 即有效。"""
         cookie_str, kept_cf = self.cf_cookies()
+        self._cf_precheck(kept_cf)
         resp, _ = self.browser_request(
             lambda sess: sess.get(f"{BASE}/session/current.json", timeout=20),
             cookie=cookie_str,
@@ -487,6 +566,6 @@ class LinuxDo(Site):
         if resp.status_code in (401, 403, 404):
             # 和 _guard 同样的双保险：CF 自定义 404 挑战页不能说成 cookie 失效
             if _cf_blocked(resp):
-                return False, _cf_block_message(resp.status_code)
+                return False, _cf_block_message(resp.status_code, kept_cf)
             return False, "Cookie 已失效（未登录）"
         return False, f"检测失败：HTTP {resp.status_code}"

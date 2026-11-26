@@ -16,7 +16,13 @@
     # <scheme> 可为 socks5h://（域名交给代理解析）/ socks5:// / http:// / https://
     # 未传 --proxy 时依次读 DIAG_PROXY、GLOBAL_PROXY；两者都空则按直连诊断。
 
-脚本只读：不写文件、不改配置、不携带任何登录态（不构造 Cookie 头）。
+    # 带登录态只读探测（一条命令区分出口 / UA / cookie 的问题）：
+    docker exec -it checkin python3 tools/diagnose_proxy.py --check-login
+
+脚本只读：不写文件、不改配置。默认不携带任何登录态（不构造 Cookie 头）；
+仅显式传 --check-login 时，才用容器内同步层的 LinuxDo Cookie 发一次只读 GET，
+且只打印状态码 / 是否 200 / 是否含 current_user / CF 特征，
+绝不打印 Cookie 值、请求体或站点正文内容。
 """
 
 from __future__ import annotations
@@ -66,7 +72,8 @@ def _safe_error(exc: BaseException) -> str:
     return type(exc).__name__
 
 
-def _proxy_from_args() -> str:
+def _parse_args():
+    """解析命令行参数；--check-login 默认关闭，老用法行为完全不变。"""
     parser = argparse.ArgumentParser(
         description="只读诊断代理连通性、出口 IP 与 LinuxDo 404 性质（不打印凭据 / 正文）。"
     )
@@ -75,8 +82,23 @@ def _proxy_from_args() -> str:
         default="",
         help="代理地址，如 <scheme>://<host>:<port>（请写出端口）；缺省时读 DIAG_PROXY / GLOBAL_PROXY 环境变量",
     )
-    args = parser.parse_args()
-    raw = str(args.proxy or os.environ.get("DIAG_PROXY") or os.environ.get("GLOBAL_PROXY") or "")
+    parser.add_argument(
+        "--check-login",
+        action="store_true",
+        help="额外用容器内同步层的 LinuxDo Cookie 只读 GET /session/current.json（不打印 Cookie / 正文）",
+    )
+    return parser.parse_args()
+
+
+def _proxy_from_args(args=None) -> str:
+    """取代理串：--proxy > DIAG_PROXY > GLOBAL_PROXY；保留旧调用方式。"""
+    args = args if args is not None else _parse_args()
+    raw = str(
+        getattr(args, "proxy", "")
+        or os.environ.get("DIAG_PROXY")
+        or os.environ.get("GLOBAL_PROXY")
+        or ""
+    )
     return raw.strip()
 
 
@@ -198,8 +220,87 @@ def _check_linuxdo(proxy_map: dict[str, str] | None) -> None:
             print("  结论: 未见明确 CF 正文标记；若同时有 cf-ray / server=cloudflare，先换节点验证。")
 
 
+def _check_login_state(proxy_map: dict[str, str] | None) -> None:
+    """带登录态只读 GET /session/current.json，一条命令区分出口 / UA / cookie。
+
+    安全边界：
+    * Cookie 只从 checkin.cookiesync.cookie_for("LINUXDO") 读，绝不打印其值；
+    * 只打印状态码 / 布尔特征，不打印正文内容；
+    * 容器内没有 data/cookies.json（或没有 LINUXDO 记录）时打印 SKIP，不崩；
+    * 同步层不存 ua（ua 在面板/配置文件），所以这里用 curl_cffi 指纹自带 UA，
+      并明确提示用户：验证 UA 匹配请用站点自带的 verify()。
+    """
+    try:
+        from checkin.cookiesync import cookie_for
+    except Exception as exc:  # noqa: BLE001
+        print(f"  带登录态探测: SKIP ({_safe_error(exc)})：无法导入 checkin.cookiesync")
+        return
+    try:
+        cookie = cookie_for("LINUXDO")
+    except Exception as exc:  # noqa: BLE001
+        print(f"  带登录态探测: SKIP ({_safe_error(exc)})：读取同步层 Cookie 失败")
+        return
+    if not cookie:
+        print("  带登录态探测: SKIP（同步层 data/cookies.json 里没有 LINUXDO 的 Cookie）")
+        return
+
+    # 只判断有没有 cf_clearance 这个键，不显示任何 cookie 值 / 完整键名列表
+    try:
+        from checkin.core import parse_cookie
+
+        names = parse_cookie(cookie).keys()
+        has_cf_clearance = "cf_clearance" in names
+    except Exception:  # noqa: BLE001
+        has_cf_clearance = False
+    print(f"  同步层 Cookie: 已读取（值不显示；含 cf_clearance={_yes(has_cf_clearance)}）")
+
+    if cffi_requests is None:
+        print("  带登录态探测: SKIP（curl_cffi 未安装，无法用与站点一致的指纹）")
+        return
+    try:
+        session = _new_session(proxy_map, mode="ctor" if proxy_map else "direct")
+        resp = session.get(
+            LINUXDO_SESSION_URL,
+            headers={"Cookie": cookie},
+            timeout=TIMEOUT,
+        )
+    except Exception as exc:  # noqa: BLE001
+        print(f"  带登录态探测: FAIL ({_safe_error(exc)})")
+        return
+
+    headers = resp.headers or {}
+    body = (resp.text or "")[:4000].lower()
+    status = resp.status_code
+    cf_body = any(marker in body for marker in CF_MARKERS)
+    mitigated = bool(headers.get("cf-mitigated"))
+    ray = bool(headers.get("cf-ray"))
+    server_cf = "cloudflare" in str(headers.get("server") or "").lower()
+    current_user = "current_user" in body
+    error_type = "error_type" in body
+    print(
+        f"  带登录态 /session/current.json: HTTP {status} is_200={_yes(status == 200)} "
+        f"current_user={_yes(current_user)} cf-ray={_yes(ray)} "
+        f"cf-mitigated={_yes(mitigated)} server_cloudflare={_yes(server_cf)} "
+        f"body_cf_marker={_yes(cf_body)}"
+    )
+    if status == 200 and current_user:
+        print("  结论: 登录态有效（带 Cookie 能拿到 current_user）。")
+    elif cf_body or mitigated:
+        print("  结论: 命中 CF 挑战 —— 出口 IP / UA 与换取 cf_clearance 时不一致的可能性最大。")
+    elif current_user or error_type:
+        print("  结论: 站点正常返回但没有登录态 —— Cookie 本身可能失效（_t 过期 / 换设备）。")
+    else:
+        print("  结论: 未见明确特征；对比匿名探测结果，若两者不同说明 Cookie 生效但被站点拒绝。")
+    print(
+        "  提示: 本探测的 UA 来自 curl_cffi 指纹，不是面板的 ua；"
+        "要验证 UA 是否匹配请用站点自带的 verify()。"
+    )
+
+
 def main() -> int:
-    proxy = _proxy_from_args()
+    args = _parse_args()
+    proxy = _proxy_from_args(args)
+    check_login = bool(getattr(args, "check_login", False))
     _check_env()
     print(f"  选中代理: {_describe_proxy(proxy) if proxy else '(none, 直连模式)'}")
 
@@ -209,21 +310,25 @@ def main() -> int:
     else:
         print("  TCP 连通: SKIP (未提供代理)")
 
+    proxy_map = {"http": proxy, "https": proxy} if proxy else None
     if cffi_requests is None:
         print("== curl_cffi: MISSING，跳过三种模式对比 ==")
-        return 0
-
-    proxy_map = {"http": proxy, "https": proxy} if proxy else None
-    print("== 出口 IP（curl_cffi 三种模式）==")
-    _check_exit_ip(None, mode="direct")
-    if proxy_map:
-        _check_exit_ip(proxy_map, mode="ctor")
-        _check_exit_ip(proxy_map, mode="post")
     else:
-        print("  未提供代理：跳过 ctor-proxies / post-assign 两种模式。")
+        print("== 出口 IP（curl_cffi 三种模式）==")
+        _check_exit_ip(None, mode="direct")
+        if proxy_map:
+            _check_exit_ip(proxy_map, mode="ctor")
+            _check_exit_ip(proxy_map, mode="post")
+        else:
+            print("  未提供代理：跳过 ctor-proxies / post-assign 两种模式。")
 
-    print("== LinuxDo 接口特征 ==")
-    _check_linuxdo(proxy_map)
+        print("== LinuxDo 接口特征（匿名）==")
+        _check_linuxdo(proxy_map)
+
+    # 独立于 curl_cffi 是否可用：缺依赖时 _check_login_state 内部也会打印 SKIP
+    if check_login:
+        print("== LinuxDo 登录态只读探测（--check-login）==")
+        _check_login_state(proxy_map)
     return 0
 
 
