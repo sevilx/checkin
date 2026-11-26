@@ -11,7 +11,15 @@
 随机常识题没法用纯 HTTP 可靠作答，预置答案只会引入答错扣分的风险。
 所以本模块**固定走 wantskip（不会）**：收益略低但零风险、零维护，不答题、
 不预置任何答案。流程是 GET bakatest.php 现取 questionid（题目每次都随机）
-并确认登录态，再 POST ``questionid=<id>&wantskip=不会``，Referer 指向答题页。
+并确认登录态，再 POST ``questionid=<id>&choice[]=<n>&wantskip=不会``，
+Referer 指向答题页。
+
+**为什么必须带 choice[]**：NexusPHP 的 bakatest.php 在验证分支里先算
+``$answersum``，没选 radio 就直接 ``stderr("出错了", "没有选择选项哦...")``，
+哪怕点了「不会」也一样。stderr 用默认标题渲染，返回的就是首页导航那张页面，
+看起来像「提交没生效」。因为 wantskip 分支会跳过答错扣分逻辑，
+随手带一个当次页面上的合法选项即可：零扣分风险，答对了还可能额外 +5。
+选项值每次从 GET 到的表单里现取，不写死答案。
 
 登录票据是标准 NexusPHP 的 c_secure_* 系列，判据用 c_secure_uid + c_secure_pass。
 """
@@ -33,9 +41,21 @@ QUESTION_ID = re.compile(
 )
 LOGIN_HINTS = ("请先登录", "尚未登录", "您需要登录", "登录后才能", "请登录", "需要登录")
 # 已签到要用完整句，避免把答题页上的规则说明 / 统计数字误判成已签到
+# NexusPHP 原文是「今天已经签过到了(已连续N天签到)」，它没有「今天已经签到」这个子串，
+# 所以把「签过到」也收进来，否则重复签到会被误判成「结果无法判断」。
 DONE_HINTS = (
     "今天已经签到", "今日已签到", "您已签到", "已经签到过", "重复签到",
-    "今天已签", "今日已签", "请勿重复签到",
+    "今天已签", "今日已签", "请勿重复签到", "签过到",
+)
+# <input type='radio' name='choice[]' value='4'> —— 属性顺序兼容，取非 0 的合法选项值
+CHOICE_VALUE = re.compile(
+    r"""<input\b[^>]*name\s*=\s*['"]choice\[\]['"][^>]*?value\s*=\s*['"](\d+)['"]"""
+    r"""|<input\b[^>]*value\s*=\s*['"](\d+)['"][^>]*?name\s*=\s*['"]choice\[\]['"]""",
+    re.I,
+)
+USERCOMMENT = re.compile(
+    r"""<textarea\b[^>]*name\s*=\s*['"]usercomment['"][^>]*>([^<]*)</textarea\s*>""",
+    re.I | re.S,
 )
 # 成功文案分两级，区别在于「会不会出现在答题页的规则说明区」。
 #
@@ -116,6 +136,25 @@ class CHDBits(Site):
         )
 
     @staticmethod
+    def _choice_value(html: str) -> str:
+        """从本次 GET 到的表单里取一个非 0 的 radio 值。
+
+        站点在验证分支里用 ``array_sum($_POST["choice"])`` 判空，值为 0 会被当成
+        「没选选项」直接 stderr；所以必须挑一个 > 0 的。wantskip 分支不会因答错扣分。
+        """
+        for match in CHOICE_VALUE.finditer(html or ""):
+            value = (match.group(1) or match.group(2) or "").strip()
+            if value.isdigit() and int(value) > 0:
+                return value
+        return ""
+
+    @staticmethod
+    def _usercomment(html: str) -> str:
+        """取页面上「此刻心情」的预填值，让 POST 和浏览器表单提交一致（非必需，仅日志用）。"""
+        match = USERCOMMENT.search(html or "")
+        return match.group(1).strip() if match else ""
+
+    @staticmethod
     def _gain(text: str) -> str:
         for match in MAGIC.finditer(text or ""):
             num = (match.group(1) or match.group(2) or "").strip()
@@ -161,12 +200,27 @@ class CHDBits(Site):
                 f"页面返回：{plain[:160] or '空'} —— 如果今天还没签到，请手动打开 {SIGN_PAGE} 确认页面结构"
             )
 
+        # 站点即使点「不会」也要求选中一个 radio：没有 choice[] 会直接 stderr 出
+        # 「没有选择选项哦，就算不会也要随便选择一个选项哦」的默认标题页（看起来像首页导航）。
+        choice = self._choice_value(html)
+        if not choice:
+            raise RuntimeError(
+                "答题页里找不到可提交的 choice[] 选项值，无法走「不会」通道。"
+                f"请手动打开 {SIGN_PAGE} 确认表单结构是否又改版了"
+            )
+
         lines: list[Line] = [Line("签到方式", "不会（稳妥 +5 魔力，不答题）")]
 
-        # 2) POST wantskip（"不会"）：拿 5 魔力、算签到，且绝不会答错扣分
+        # 2) POST wantskip（"不会"）：拿 5 魔力、算签到，且绝不会答错扣分。
+        # choice[] 只带一个当前题目上的合法值（wantskip 分支不判错扣分）。
         post = session.post(
             SIGN_PAGE,
-            data={"questionid": qid, "wantskip": "不会"},
+            data={
+                "questionid": qid,
+                "choice[]": choice,
+                "usercomment": self._usercomment(html),
+                "wantskip": "不会",
+            },
             headers={
                 **XHR_HEADERS,
                 "Referer": SIGN_PAGE,
