@@ -27,7 +27,7 @@ import random
 import re
 import time
 
-from ..core import Line, Site, XHR_HEADERS, looks_blocked, parse_cookie
+from ..core import Line, Site, XHR_HEADERS, looks_blocked, parse_cookie, parse_flag
 
 BASE = "https://linux.do"
 MAX_BROWSE = 10
@@ -56,7 +56,8 @@ def _int(value, default: int = 0, lo: int = 0, hi: int = 0) -> int:
 
 
 def _flag(value) -> bool:
-    return str(value or "").strip().lower() in ("1", "true", "yes", "on")
+    # 复用 core 的解析：容忍用户把说明里的 `keep_cf=1` 整句抄进输入框
+    return parse_flag(value)
 
 
 def _duration(seconds: int) -> str:
@@ -130,9 +131,9 @@ class LinuxDo(Site):
         f"browse=浏览主题数（默认 3，上限 {MAX_BROWSE}）；"
         "read_report=1 时把实际阅读耗时上报（默认关）；"
         f"like=N 时对本次读过的帖子点赞（默认关，上限 {MAX_LIKE}）；"
-        "keep_cf=1 时保留浏览器里的 cf_clearance（默认丢弃），"
-        "必须同时把当时那个浏览器的 UA 填进 ua，且容器出口 IP 要和浏览器一致——"
-        "三项对不上就别开，会更像伪造请求"
+        "keep_cf 填 1 时保留浏览器里的 cf_clearance（默认丢弃；只填值本身 1，"
+        "不要连字段名写成 keep_cf=1），必须同时把当时那个浏览器的 UA 填进 ua，"
+        "且容器出口 IP 要和浏览器一致——三项对不上就别开，会更像伪造请求"
     )
     cf_impersonates = ("safari15_5", "chrome120", "chrome110")
 
@@ -172,6 +173,17 @@ class LinuxDo(Site):
         本方法只在 kept_cf=True 且 ua 为空时触发，其他情况一律静默走原流程。
         """
         ua = str(self.account.get("ua") or "").strip()
+        raw_keep = str(self.account.get("keep_cf") or "").strip()
+        # keep_cf 填了非空、又识别不出真假，说明八成是填错了（如 yes1 / 开启）。
+        # 明确拦下并提示合法值，避免像"keep_cf=1 被当关闭"那样无声失效。
+        # parse_flag 已能容忍 keep_cf=1 / keep_cf=true，这类不会再走到这里。
+        normalized = raw_keep.split("=", 1)[-1].strip().lower() if "=" in raw_keep else raw_keep.lower()
+        if raw_keep and not _flag(raw_keep) and normalized not in ("0", "false", "no", "off"):
+            raise RuntimeError(
+                f"keep_cf 的值看不懂：你填的是 {raw_keep!r}。\n"
+                "这个开关只能填 1 / true / yes / on（开启）或 0 / false / no / off（关闭），"
+                "直接填值就行，不要带字段名。"
+            )
         if not (kept_cf and not ua):
             return
         raise RuntimeError(
@@ -193,7 +205,7 @@ class LinuxDo(Site):
         追加一条说明，避免 browser_request 层被拦截时提示自相矛盾。
         """
         hint = super().cf_hint(blocked)
-        keep = str(self.account.get("keep_cf") or "").strip().lower() in ("1", "true", "yes", "on")
+        keep = _flag(self.account.get("keep_cf"))
         if not (keep and self.has_cf_clearance):
             return hint
         return (

@@ -137,6 +137,23 @@ def looks_blocked(status: int, text: str, headers=None) -> bool:
     return False
 
 
+TRUE_VALUES = ("1", "true", "yes", "on")
+
+
+def parse_flag(value) -> bool:
+    """把配置里的开关值解析成布尔，容忍「字段名=值」这种填法。
+
+    站点说明里常写成 `keep_cf=1`，用户容易把整句抄进输入框。在这里剥掉
+    可选的 `字段名=` 前缀再判断，避免明明想开却被当成关闭、悄无声息地失效。
+    合法值仍是 1 / true / yes / on（大小写、首尾空格不敏感），其余一律 False。
+    """
+    text = str(value or "").strip().lower()
+    if "=" in text:
+        # 只剥第一段键名：keep_cf=1 → 1；不在白名单的值保持原样 → False
+        text = text.split("=", 1)[1].strip().lower()
+    return text in TRUE_VALUES
+
+
 def cookie_string(cookies: dict[str, str]) -> str:
     """把 cookie 字典拼回 `a=1; b=2`，顺序保持原始插入顺序。"""
     return "; ".join(f"{key}={value}" for key, value in cookies.items() if key)
@@ -308,7 +325,7 @@ class Site:
         此时还要用 `ua` 字段把浏览器 UA 一起写进来，否则同样对不上。
         """
         cookies = parse_cookie(self.cookie)
-        keep = str(self.account.get("keep_cf") or "").strip().lower() in ("1", "true", "yes", "on")
+        keep = parse_flag(self.account.get("keep_cf"))
         if keep:
             return cookie_string(cookies), bool(cookies.get("cf_clearance"))
         kept = {k: v for k, v in cookies.items() if k.lower() not in CF_COOKIES}
