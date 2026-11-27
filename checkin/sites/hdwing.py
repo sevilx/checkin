@@ -171,8 +171,15 @@ class HDWinG(Site):
         探测只确认了 ``state == "success"`` 是成功，其他 state 字符串没有抓全，
         所以先用文案宽泛识别「已签到 / 未登录 / CSRF 失败」，再剩下的一律当失败，
         绝不把没见过的 state 直接当成成功。
+
+        例外：签到插件对「今天已经签过」的重复请求返回裸 ``{"state": false}``
+        （布尔 False、无 message）。``str(False or "")`` 会把它吞成空串，旧代码
+        因此落进 fail、误报成「签到失败：接口返回 state=False」。严格限定为
+        布尔 False 且完全没有提示文案才判「今日已签到」，以免把带未知失败文案的
+        state=False 误报成功。
         """
-        state = str(data.get("state") or "").strip().lower()
+        raw_state = data.get("state")
+        state = str(raw_state or "").strip().lower()
         message = str(data.get("message") or data.get("msg") or data.get("info") or "").strip()
         days = data.get("signindays")
         integral = data.get("integral")
@@ -185,6 +192,8 @@ class HDWinG(Site):
             return "done", message, days, integral
         if any(hint in blob for hint in CSRF_HINTS):
             return "csrf", message, days, integral
+        if raw_state is False and not message:
+            return "done", "今日已签到（重复签到）", days, integral
         return "fail", message, days, integral
 
     # ------------------------------------------------------------------ #

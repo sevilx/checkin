@@ -137,6 +137,28 @@ class LinuxDo(Site):
     )
     cf_impersonates = ("safari15_5", "chrome120", "chrome110")
 
+    def impersonates(self) -> tuple[str | None, ...]:
+        """按 ua 声明的浏览器家族挑选 TLS 指纹，避免「UA 是火狐、握手是苹果/谷歌」。
+
+        Cloudflare 会交叉核对 User-Agent 声明与 TLS/HTTP2 握手指纹：家族对不上时
+        （例如 UA=Firefox、指纹=safari15_5）即便 cf_clearance 与出口 IP 都对，也会被
+        判为伪造而挑战（常见 404 拦截页）。keep_cf=1 保留的 cf_clearance 本就是某个
+        浏览器家族换来的，所以指纹必须和 ua 同家族。
+
+        curl_cffi 0.17 原生支持 firefox133/135/144/147/153/154/155；用户浏览器是
+        Firefox 160，没有完全同版本指纹，用最接近的 firefox155（家族一致即可，CF
+        不逐版本核对握手指纹）。ua 没声明家族时保持原有 safari/chrome 轮换。
+        """
+        base = super().impersonates()
+        if not base or base == (None,):  # 没装 curl_cffi：沿用 requests 单次请求
+            return base
+        ua = str(self.account.get("ua") or "").lower()
+        if "firefox" in ua or "gecko/" in ua:
+            return ("firefox155", "firefox154", "firefox133", "chrome120", "chrome110")
+        if "chrome" in ua or "chromium" in ua or "edg/" in ua:
+            return ("chrome120", "chrome110", "firefox155")
+        return base
+
     def __init__(self, account: dict, index: int = 0):
         super().__init__(account, index)
         cookies = parse_cookie(self.cookie)
