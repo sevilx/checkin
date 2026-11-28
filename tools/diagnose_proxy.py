@@ -45,8 +45,10 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 try:  # pragma: no cover - 容器里预装，本地可能没有
+    import curl_cffi as _curl_cffi_pkg  # type: ignore  # __version__ 挂在顶层包
     from curl_cffi import requests as cffi_requests  # type: ignore
 except Exception:  # noqa: BLE001
+    _curl_cffi_pkg = None
     cffi_requests = None
 
 try:  # 与主程序共用同一套高特异性标记，避免诊断结论和拦截判定不一致
@@ -128,15 +130,38 @@ def _parse_args():
 
 
 def _proxy_from_args(args=None) -> str:
-    """取代理串：--proxy > DIAG_PROXY > GLOBAL_PROXY；保留旧调用方式。"""
+    """取代理串，优先级与主程序一致：
+    --proxy > DIAG_PROXY > GLOBAL_PROXY > 面板站点代理(LINUXDO) > 面板全局代理。
+
+    诊断必须复现签到真正用的网络路径。之前只读命令行和环境变量，漏掉了面板里
+    保存的站点代理（签到用 settings.site_proxy() 读它），导致用户在面板配了代理、
+    诊断却走直连、全部 ConnectionError 的假象。面板值只用于连接，绝不回显（打印时
+    走 _describe_proxy，只有 scheme/host/port，不含 userinfo/口令）。
+    """
     args = args if args is not None else _parse_args()
     raw = str(
         getattr(args, "proxy", "")
         or os.environ.get("DIAG_PROXY")
         or os.environ.get("GLOBAL_PROXY")
         or ""
-    )
-    return raw.strip()
+    ).strip()
+    if raw:
+        return raw
+    # 命令行和环境变量都没给时，退回面板/配置里保存的代理，顺序与 core.session() 完全一致：
+    # 账号级 proxy（填在账号卡片里）> 站点级 > 全局。之前漏了账号级，导致面板账号卡片里
+    # 配的 socks5h 代理被当成直连，诊断全是 ConnectionError 的假象。
+    try:
+        from checkin import settings
+
+        account_proxy = ""
+        accounts = settings.site_accounts("LINUXDO")
+        if accounts and isinstance(accounts[0], dict):
+            account_proxy = str(accounts[0].get("proxy") or "").strip()
+        return str(
+            account_proxy or settings.site_proxy("LINUXDO") or settings.global_proxy() or ""
+        ).strip()
+    except Exception:  # noqa: BLE001 - 诊断只读工具，读不到配置就当没配，不要崩
+        return ""
 
 
 def _endpoint(proxy: str) -> tuple[str, int]:
@@ -411,7 +436,11 @@ def main() -> int:
     ua = str(getattr(args, "ua", "") or "")
     _check_env()
     version = (
-        str(getattr(cffi_requests, "__version__", "unknown"))
+        str(
+            getattr(_curl_cffi_pkg, "__version__", "")
+            or getattr(cffi_requests, "__version__", "")
+            or "unknown"
+        )
         if cffi_requests is not None
         else "NOT INSTALLED"
     )

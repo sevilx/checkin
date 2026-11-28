@@ -25,8 +25,10 @@ from . import settings
 # 像 NodeSeek、LinuxDo 这种挂了 Cloudflare 的站点，光拼请求头没用 —— Cloudflare 会先看
 # TLS 握手长什么样，requests 的握手特征太"像脚本"，直接挑战或 403。
 try:  # pragma: no cover - 取决于运行环境是否装了可选依赖
+    import curl_cffi as _curl_cffi_pkg  # type: ignore  # __version__ 挂在顶层包
     from curl_cffi import requests as cffi_requests  # type: ignore
 except Exception:  # noqa: BLE001
+    _curl_cffi_pkg = None
     cffi_requests = None
 
 
@@ -42,7 +44,11 @@ def curl_cffi_version() -> tuple[int, ...] | None:
     """
     if cffi_requests is None:
         return None
-    raw = str(getattr(cffi_requests, "__version__", "") or "")
+    # __version__ 在顶层 curl_cffi 包上，curl_cffi.requests 子模块通常没有；
+    # 先读顶层包，再退回子模块（兼容只在子模块挂版本号的环境）。
+    raw = str(
+        getattr(_curl_cffi_pkg, "__version__", "") or getattr(cffi_requests, "__version__", "") or ""
+    )
     parts: list[int] = []
     for chunk in raw.split(".")[:3]:
         match = re.match(r"^(\d+)", chunk)

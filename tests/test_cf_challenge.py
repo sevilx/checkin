@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import os
 import sys
 import unittest
 from pathlib import Path
@@ -227,6 +228,70 @@ class TestDiagnoseScript(unittest.TestCase):
         secret_url = "socks5://user:SECRET_VALUE@proxy.example.invalid:1080"
         self.assertEqual(
             diagnose_proxy._safe_error(RuntimeError(secret_url)), "RuntimeError"
+        )
+
+    def test_version_read_from_top_level_package(self):
+        """__version__ 挂在顶层 curl_cffi 包，不能只读 requests 子模块。"""
+        saved_pkg, saved_req = core._curl_cffi_pkg, core.cffi_requests
+
+        class TopWithVersion:
+            __version__ = "0.17.0"
+
+        class ReqNoVersion:
+            pass  # 子模块没有 __version__（真实环境的样子）
+
+        try:
+            core._curl_cffi_pkg = TopWithVersion
+            core.cffi_requests = ReqNoVersion
+            self.assertEqual(core.curl_cffi_version(), (0, 17, 0))
+            # 顶层没有时仍能退回子模块（兼容只在子模块挂版本号的环境）
+            class ReqWithVersion:
+                __version__ = "0.17.0b1"
+
+            core._curl_cffi_pkg = None
+            core.cffi_requests = ReqWithVersion
+            self.assertEqual(core.curl_cffi_version(), (0, 17, 0))
+        finally:
+            core._curl_cffi_pkg, core.cffi_requests = saved_pkg, saved_req
+
+    def test_proxy_from_args_reads_account_level_proxy(self):
+        """面板账号卡片里的代理（account.proxy）必须被诊断脚本读到，否则复现不了。"""
+        from tools import diagnose_proxy
+
+        class Args:
+            proxy = ""
+
+        saved = os.environ.get("DIAG_PROXY"), os.environ.get("GLOBAL_PROXY")
+        os.environ.pop("DIAG_PROXY", None)
+        os.environ.pop("GLOBAL_PROXY", None)
+        try:
+            from checkin import settings
+
+            orig = settings.site_accounts
+            settings.site_accounts = lambda key: [
+                {"proxy": "socks5h://proxy.example.invalid:1080"}
+            ]
+            try:
+                got = diagnose_proxy._proxy_from_args(Args())
+                self.assertEqual(got, "socks5h://proxy.example.invalid:1080")
+            finally:
+                settings.site_accounts = orig
+        finally:
+            for name, value in zip(("DIAG_PROXY", "GLOBAL_PROXY"), saved):
+                if value is None:
+                    os.environ.pop(name, None)
+                else:
+                    os.environ[name] = value
+
+    def test_proxy_from_args_cli_overrides_panel(self):
+        """命令行代理优先级最高。"""
+        from tools import diagnose_proxy
+
+        class Args:
+            proxy = "http://cli.example.invalid:8080"
+
+        self.assertEqual(
+            diagnose_proxy._proxy_from_args(Args()), "http://cli.example.invalid:8080"
         )
 
 
