@@ -19,10 +19,14 @@
     # 带登录态只读探测（一条命令区分出口 / UA / cookie 的问题）：
     docker exec -it checkin python3 tools/diagnose_proxy.py --check-login
 
+    # 指定指纹 / UA（两者都不是私密值），并打印 curl_cffi 版本与 2x2 对比：
+    docker exec -it checkin python3 tools/diagnose_proxy.py --check-login \
+        --impersonate firefox155 --ua '<浏览器 UA>'
+
 脚本只读：不写文件、不改配置。默认不携带任何登录态（不构造 Cookie 头）；
-仅显式传 --check-login 时，才用容器内同步层的 LinuxDo Cookie 发一次只读 GET，
-且只打印状态码 / 是否 200 / 是否含 current_user / CF 特征，
-绝不打印 Cookie 值、请求体或站点正文内容。
+仅显式传 --check-login 时，才用容器内同步层的 LinuxDo Cookie 发一组只读 GET
+（单次探测 + 指纹 × cf_clearance 的 2x2 对比），且只打印状态码 / 是否 200 /
+是否含 current_user / CF 特征，绝不打印 Cookie 值、请求体或站点正文内容。
 """
 
 from __future__ import annotations
@@ -46,7 +50,12 @@ except Exception:  # noqa: BLE001
     cffi_requests = None
 
 try:  # 与主程序共用同一套高特异性标记，避免诊断结论和拦截判定不一致
-    from checkin.core import _HIGH_SPECIFIC_BLOCK_MARKERS as CF_MARKERS
+    from checkin.core import (
+        CF_COOKIES,
+        _HIGH_SPECIFIC_BLOCK_MARKERS as CF_MARKERS,
+        cookie_string,
+        parse_cookie,
+    )
 except Exception:  # noqa: BLE001
     CF_MARKERS = (
         "cf-error-details",
@@ -56,10 +65,28 @@ except Exception:  # noqa: BLE001
         "cf_chl_opt",
         "cf_clearance",
     )
+    CF_COOKIES = (
+        "cf_clearance", "__cf_bm", "_cfuvid", "cf_chl_2",
+        "cf_chl_prog", "cf_chl_1", "cf_ob_info", "cf_use_ob",
+    )
+
+    def parse_cookie(raw: str) -> dict[str, str]:
+        """core.parse_cookie 的最小兜底，只读诊断不依赖它也要能跑。"""
+        out: dict[str, str] = {}
+        for part in str(raw or "").replace("\n", ";").split(";"):
+            key, sep, value = part.strip().partition("=")
+            if sep and key:
+                out[key.strip()] = value.strip()
+        return out
+
+    def cookie_string(cookies: dict[str, str]) -> str:
+        return "; ".join(f"{key}={value}" for key, value in cookies.items() if key)
 
 IP_URL = "https://api.ipify.org?format=json"
 LINUXDO_SESSION_URL = "https://linux.do/session/current.json"
 IMPERSONATE = "chrome120"
+# 2x2 对比固定用这两个指纹：Firefox 家族 vs 站点默认 Chrome，覆盖"家族矛盾"假设。
+MATRIX_IMPERSONATES = ("firefox155", "chrome120")
 TIMEOUT = 12
 
 
@@ -86,6 +113,16 @@ def _parse_args():
         "--check-login",
         action="store_true",
         help="额外用容器内同步层的 LinuxDo Cookie 只读 GET /session/current.json（不打印 Cookie / 正文）",
+    )
+    parser.add_argument(
+        "--impersonate",
+        default=IMPERSONATE,
+        help=f"单次带登录态探测用的 curl_cffi 指纹（非私密值，默认 {IMPERSONATE}）",
+    )
+    parser.add_argument(
+        "--ua",
+        default="",
+        help="单次探测注入的 User-Agent（非私密值；与站点 ua 字段一致才复现真实请求）",
     )
     return parser.parse_args()
 
@@ -144,19 +181,19 @@ def _check_tcp(proxy: str) -> None:
         print(f"  TCP 连通: NO (host={host}, port={port}, {_safe_error(exc)})")
 
 
-def _new_session(proxy_map: dict[str, str] | None, mode: str):
+def _new_session(proxy_map: dict[str, str] | None, mode: str, impersonate: str = IMPERSONATE):
     """mode: direct / ctor / post；与 core.session() 的三种 curl_cffi 模式对齐。"""
     if cffi_requests is None:
         raise RuntimeError("curl_cffi missing")
     if proxy_map and mode == "ctor":
         try:
-            return cffi_requests.Session(impersonate=IMPERSONATE, proxies=proxy_map)
+            return cffi_requests.Session(impersonate=impersonate, proxies=proxy_map)
         except TypeError:  # 老版本不认构造参数，退回属性赋值
             sess = cffi_requests.Session()
-            sess.impersonate = IMPERSONATE
+            sess.impersonate = impersonate
             sess.proxies = dict(proxy_map)
             return sess
-    sess = cffi_requests.Session(impersonate=IMPERSONATE)
+    sess = cffi_requests.Session(impersonate=impersonate)
     if proxy_map and mode == "post":
         sess.proxies = dict(proxy_map)
     return sess
@@ -220,15 +257,19 @@ def _check_linuxdo(proxy_map: dict[str, str] | None) -> None:
             print("  结论: 未见明确 CF 正文标记；若同时有 cf-ray / server=cloudflare，先换节点验证。")
 
 
-def _check_login_state(proxy_map: dict[str, str] | None) -> None:
+def _check_login_state(
+    proxy_map: dict[str, str] | None,
+    impersonate: str = IMPERSONATE,
+    ua: str = "",
+) -> None:
     """带登录态只读 GET /session/current.json，一条命令区分出口 / UA / cookie。
 
     安全边界：
     * Cookie 只从 checkin.cookiesync.cookie_for("LINUXDO") 读，绝不打印其值；
     * 只打印状态码 / 布尔特征，不打印正文内容；
     * 容器内没有 data/cookies.json（或没有 LINUXDO 记录）时打印 SKIP，不崩；
-    * 同步层不存 ua（ua 在面板/配置文件），所以这里用 curl_cffi 指纹自带 UA，
-      并明确提示用户：验证 UA 匹配请用站点自带的 verify()。
+    * 同步层不存 ua（ua 在面板/配置文件），默认用 curl_cffi 指纹自带 UA；
+      显式传 --ua 时才注入（UA 本身不是私密值），用于复现真实请求。
     """
     try:
         from checkin.cookiesync import cookie_for
@@ -257,24 +298,26 @@ def _check_login_state(proxy_map: dict[str, str] | None) -> None:
     if cffi_requests is None:
         print("  带登录态探测: SKIP（curl_cffi 未安装，无法用与站点一致的指纹）")
         return
+    headers = {"Cookie": cookie}
+    if ua:
+        headers["User-Agent"] = ua
     try:
-        session = _new_session(proxy_map, mode="ctor" if proxy_map else "direct")
-        resp = session.get(
-            LINUXDO_SESSION_URL,
-            headers={"Cookie": cookie},
-            timeout=TIMEOUT,
+        session = _new_session(
+            proxy_map, mode="ctor" if proxy_map else "direct", impersonate=impersonate
         )
+        resp = session.get(LINUXDO_SESSION_URL, headers=headers, timeout=TIMEOUT)
     except Exception as exc:  # noqa: BLE001
-        print(f"  带登录态探测: FAIL ({_safe_error(exc)})")
+        print(f"  带登录态探测: FAIL (impersonate={impersonate}, {_safe_error(exc)})")
         return
+    print(f"  带登录态探测参数: impersonate={impersonate} ua_injected={_yes(bool(ua))}")
 
-    headers = resp.headers or {}
+    resp_headers = resp.headers or {}
     body = (resp.text or "")[:4000].lower()
     status = resp.status_code
     cf_body = any(marker in body for marker in CF_MARKERS)
-    mitigated = bool(headers.get("cf-mitigated"))
-    ray = bool(headers.get("cf-ray"))
-    server_cf = "cloudflare" in str(headers.get("server") or "").lower()
+    mitigated = bool(resp_headers.get("cf-mitigated"))
+    ray = bool(resp_headers.get("cf-ray"))
+    server_cf = "cloudflare" in str(resp_headers.get("server") or "").lower()
     current_user = "current_user" in body
     error_type = "error_type" in body
     print(
@@ -292,8 +335,71 @@ def _check_login_state(proxy_map: dict[str, str] | None) -> None:
     else:
         print("  结论: 未见明确特征；对比匿名探测结果，若两者不同说明 Cookie 生效但被站点拒绝。")
     print(
-        "  提示: 本探测的 UA 来自 curl_cffi 指纹，不是面板的 ua；"
-        "要验证 UA 是否匹配请用站点自带的 verify()。"
+        "  提示: 未传 --ua 时本探测的 UA 来自 curl_cffi 指纹，不是面板的 ua；"
+        "要完全复现站点请求请同时传 --impersonate 与 --ua（两者都不是私密值）。"
+    )
+
+
+def _check_login_matrix(proxy_map: dict[str, str] | None, ua: str = "") -> None:
+    """只读 2x2 对比：firefox155/chrome120 × 保留/丢弃 cf_clearance。
+
+    Cookie 永远只从同步层读，绝不回显；只打印状态码和布尔特征。
+    """
+    try:
+        from checkin.cookiesync import cookie_for
+    except Exception as exc:  # noqa: BLE001
+        print(f"  2x2 对比: SKIP ({_safe_error(exc)})：无法导入 checkin.cookiesync")
+        return
+    try:
+        cookie = cookie_for("LINUXDO")
+    except Exception as exc:  # noqa: BLE001
+        print(f"  2x2 对比: SKIP ({_safe_error(exc)})：读取同步层 Cookie 失败")
+        return
+    if not cookie:
+        print("  2x2 对比: SKIP（同步层没有 LINUXDO 的 Cookie）")
+        return
+    if cffi_requests is None:
+        print("  2x2 对比: SKIP（curl_cffi 未安装）")
+        return
+
+    parsed = parse_cookie(cookie)
+    kept_cookie = cookie_string(parsed)
+    dropped = {key: value for key, value in parsed.items() if key.lower() not in CF_COOKIES}
+    dropped_cookie = cookie_string(dropped)
+    print(f"  同步层含 cf_clearance={_yes('cf_clearance' in parsed)}（值不显示）")
+
+    for imp in MATRIX_IMPERSONATES:
+        for label, value, keep in (
+            ("保留cf", kept_cookie, True),
+            ("丢弃cf", dropped_cookie, False),
+        ):
+            headers = {"Cookie": value}
+            # 与站点行为一致：只有保留 cf_clearance 时才注入面板 UA
+            if ua and keep:
+                headers["User-Agent"] = ua
+            try:
+                session = _new_session(
+                    proxy_map, mode="ctor" if proxy_map else "direct", impersonate=imp
+                )
+                resp = session.get(LINUXDO_SESSION_URL, headers=headers, timeout=TIMEOUT)
+            except Exception as exc:  # noqa: BLE001
+                print(f"  [{imp} × {label}]: FAIL ({_safe_error(exc)})")
+                continue
+            h = resp.headers or {}
+            body = (resp.text or "")[:4000].lower()
+            print(
+                f"  [{imp} × {label}]: HTTP {resp.status_code} "
+                f"is_200={_yes(resp.status_code == 200)} "
+                f"current_user={_yes('current_user' in body)} "
+                f"cf-ray={_yes(bool(h.get('cf-ray')))} "
+                f"cf-mitigated={_yes(bool(h.get('cf-mitigated')))} "
+                f"server_cloudflare={_yes('cloudflare' in str(h.get('server') or '').lower())} "
+                f"body_cf_marker={_yes(any(marker in body for marker in CF_MARKERS))}"
+            )
+    print(
+        "  判读: 只有某一种指纹成功 → UA / TLS 家族不匹配；"
+        "保留列全败而丢弃列成功 → cf_clearance 与出口/UA 绑定失效；"
+        "两列全败 → 出口 IP / 节点信誉。"
     )
 
 
@@ -301,7 +407,15 @@ def main() -> int:
     args = _parse_args()
     proxy = _proxy_from_args(args)
     check_login = bool(getattr(args, "check_login", False))
+    impersonate = str(getattr(args, "impersonate", "") or IMPERSONATE)
+    ua = str(getattr(args, "ua", "") or "")
     _check_env()
+    version = (
+        str(getattr(cffi_requests, "__version__", "unknown"))
+        if cffi_requests is not None
+        else "NOT INSTALLED"
+    )
+    print(f"  curl_cffi: {version}（firefox153/154/155 需要 >=0.17）")
     print(f"  选中代理: {_describe_proxy(proxy) if proxy else '(none, 直连模式)'}")
 
     print("== TCP 连通性 ==")
@@ -328,7 +442,10 @@ def main() -> int:
     # 独立于 curl_cffi 是否可用：缺依赖时 _check_login_state 内部也会打印 SKIP
     if check_login:
         print("== LinuxDo 登录态只读探测（--check-login）==")
-        _check_login_state(proxy_map)
+        _check_login_state(proxy_map, impersonate=impersonate, ua=ua)
+        if cffi_requests is not None:
+            print("== LinuxDo 2x2 只读对比（指纹 × cf_clearance）==")
+            _check_login_matrix(proxy_map, ua=ua)
     return 0
 
 

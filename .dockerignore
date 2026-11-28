@@ -14,5 +14,8 @@ __pycache__/
 .venv/
 venv/
 .DS_Store
-# 给 Windows 本机用的同步脚本，容器里用不到（容器里没有浏览器 cookie 库）
-tools/
+# 只排除给 Windows 本机用的同步脚本（容器里没有浏览器 cookie 库）。
+# diagnose_proxy.py 是容器内只读诊断工具，必须打进镜像，否则
+# docker exec -it checkin python3 tools/diagnose_proxy.py 会报 No such file or directory。
+tools/sync_cookies.py
+tools/sync.cmd

@@ -145,19 +145,35 @@ class LinuxDo(Site):
         判为伪造而挑战（常见 404 拦截页）。keep_cf=1 保留的 cf_clearance 本就是某个
         浏览器家族换来的，所以指纹必须和 ua 同家族。
 
-        curl_cffi 0.17 原生支持 firefox133/135/144/147/153/154/155；用户浏览器是
-        Firefox 160，没有完全同版本指纹，用最接近的 firefox155（家族一致即可，CF
-        不逐版本核对握手指纹）。ua 没声明家族时保持原有 safari/chrome 轮换。
+        curl_cffi 0.17 原生支持 firefox133/135/144/147/153/154/155；这里只用
+        已确认可用的 firefox155/154/153/144/133。用户浏览器是 Firefox 160，没有
+        完全同版本指纹，用最接近的 firefox155（家族一致即可，CF 不逐版本核对握手）。
+
+        Firefox 分支不再用 chrome120/110 兜底：一旦 Firefox 指纹全被挑战，回退到
+        Chrome 时请求仍带着 ua 字段里的 Firefox UA，UA 与 TLS 家族必然矛盾，只会
+        多制造两次必败请求。全部候选都保持 Firefox 家族。
         """
         base = super().impersonates()
         if not base or base == (None,):  # 没装 curl_cffi：沿用 requests 单次请求
             return base
         ua = str(self.account.get("ua") or "").lower()
         if "firefox" in ua or "gecko/" in ua:
-            return ("firefox155", "firefox154", "firefox133", "chrome120", "chrome110")
+            return ("firefox155", "firefox154", "firefox153", "firefox144", "firefox133")
         if "chrome" in ua or "chromium" in ua or "edg/" in ua:
             return ("chrome120", "chrome110", "firefox155")
         return base
+
+    def is_blocked(self, resp) -> bool:
+        """给 404 挑战页加一层站点级判据，让 browser_request 继续换指纹。
+
+        core.looks_blocked() 对 404 只认正文里的高特异性标记（cf-error-details /
+        just a moment 等）。CF 允许把挑战页伪装成一个不带这些标记的 404，此时
+        基类判据会漏判，请求被当成"正常响应"直接返回，_guard 再用 cf-ray 头判成
+        挑战并抛错 —— 一种指纹都没试完。这里复用 _cf_blocked() 的宽松判据：
+        404 + cf-ray/server:cloudflare + body 不是 Discourse JSON → 判为拦截。
+        只覆盖 LinuxDo，不影响共用 core 的其它站点。
+        """
+        return _cf_blocked(resp)
 
     def __init__(self, account: dict, index: int = 0):
         super().__init__(account, index)
@@ -220,7 +236,7 @@ class LinuxDo(Site):
             "程序会退回丢弃 cf_clearance + 多指纹尝试；但出口不干净时仍可能被挑战。"
         )
 
-    def cf_hint(self, blocked: list[tuple[str, int]]) -> str:
+    def cf_hint(self, blocked: list[tuple[str, int | str]]) -> str:
         """站点层补齐 core 通用提示：keep_cf=1 时"默认已丢掉"那句不适用。
 
         不改 core.cf_hint() 的通用行为，只在 LinuxDo 且确实保留了 cf_clearance 时

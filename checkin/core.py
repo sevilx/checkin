@@ -12,6 +12,7 @@ from __future__ import annotations
 import json
 import os
 import random
+import re
 import time
 from dataclasses import dataclass, field
 from typing import Any, Iterable
@@ -31,6 +32,24 @@ except Exception:  # noqa: BLE001
 
 def has_curl_cffi() -> bool:
     return cffi_requests is not None
+
+
+def curl_cffi_version() -> tuple[int, ...] | None:
+    """返回 curl_cffi 的版本元组（0.17.0 → (0, 17, 0)）；未安装或读不到返回 None。
+
+    只取前三段数字，兼容 0.17.0b1 这类带预发布后缀的版本串。诊断提示用它判断
+    firefox153/154/155 指纹是否可用（这三个目标自 0.17 起才被原生支持）。
+    """
+    if cffi_requests is None:
+        return None
+    raw = str(getattr(cffi_requests, "__version__", "") or "")
+    parts: list[int] = []
+    for chunk in raw.split(".")[:3]:
+        match = re.match(r"^(\d+)", chunk)
+        if not match:
+            break
+        parts.append(int(match.group(1)))
+    return tuple(parts) if parts else None
 
 
 DEFAULT_UA = (
@@ -162,16 +181,23 @@ def cookie_string(cookies: dict[str, str]) -> str:
 def _fingerprint_headers(headers: dict | None, browser: str) -> dict[str, str]:
     """指纹模式下只保留"业务头"，浏览器特征头交给 curl_cffi 自己发。
 
-    Safari 压根不发 Sec-CH-UA / Sec-Fetch-*，如果硬塞一套 Chrome 的 client hints，
-    "Safari 的 TLS 握手 + Chrome 的客户端提示" 反而比什么都不塞更可疑，所以按指纹类型裁剪。
+    Sec-CH-UA / Sec-CH-UA-Mobile 等客户端提示是 Chromium 独有的：Safari、Firefox、
+    Tor 都不发。XHR_HEADERS 里预置了一套 Chrome 的 client hints，若原样发给非 Chromium
+    指纹，就会出现 "Firefox/Safari 的 TLS 握手 + Chrome 的客户端提示" 三者打架，反而
+    比什么都不塞更可疑。所以 sec-ch-* 对任何指纹都不发（Chromium 指纹由 curl_cffi
+    按指纹自带的默认头补上），sec-fetch-* 则对非 Chromium 指纹交给指纹默认头处理。
+
+    注意：curl_cffi 的规则是"指纹默认头不会覆盖用户显式传入的头"，因此这里必须在
+    交给 session 之前裁掉，不能指望底层合并时纠正。
     """
-    safari = "safari" in str(browser).lower()
+    name = str(browser).lower()
+    non_chromium = any(family in name for family in ("safari", "firefox", "tor"))
     out: dict[str, str] = {}
     for key, value in (headers or {}).items():
         low = key.lower()
         if low.startswith("sec-ch-"):
             continue
-        if safari and low.startswith("sec-fetch-"):
+        if non_chromium and low.startswith("sec-fetch-"):
             continue
         out[key] = value
     return out
@@ -339,6 +365,20 @@ class Site:
             out["User-Agent"] = ua
         return out
 
+    def is_blocked(self, resp) -> bool:
+        """判断响应是否被 WAF 拦截；站点可覆盖以补充自己的判据。
+
+        基类只认 core.looks_blocked() 的通用特征，行为与原样调用它完全一致。
+        LinuxDo 这类会把挑战页伪装成 404 的站点覆盖本方法，追加
+        「404 + cf-ray/server:cloudflare + body 不是站点 JSON」判据，让 browser_request
+        能继续换指纹，而不是把挑战页当正常响应放行后抛泛泛的 CF 提示。
+        """
+        return looks_blocked(
+            getattr(resp, "status_code", 0),
+            getattr(resp, "text", "") or "",
+            getattr(resp, "headers", None),
+        )
+
     def browser_request(self, request, cookie: str | None = None, headers: dict | None = None):
         """依次换浏览器指纹执行 `request(session)`，直到不再被 Cloudflare 拦。
 
@@ -346,7 +386,10 @@ class Site:
         方便判断到底是 IP 的问题还是指纹的问题。
         """
         cookie_str = self.cookie if cookie is None else cookie
-        blocked: list[tuple[str, int]] = []
+        # 第二个元素可以是 HTTP 状态码（int），也可以是 "EXC:异常类名"（str）。
+        # 异常指纹（如旧版 curl_cffi 不认 firefox155）也必须出现在 tried 提示里，
+        # 否则"换了几种指纹都不行"会漏掉真正失败的那几种，无法定位。
+        blocked: list[tuple[str, int | str]] = []
         last_exc: BaseException | None = None
         for imp in self.impersonates():
             try:
@@ -354,36 +397,47 @@ class Site:
                 resp = request(session)
             except Exception as exc:  # noqa: BLE001
                 last_exc = exc
+                blocked.append((imp or "requests", f"EXC:{type(exc).__name__}"))
                 continue
-            # looks_blocked 已对 404 解耦：CF 自定义 404 挑战页也会记进 blocked，
-            # 于是继续换下一个指纹；三种指纹全被拦时统一走下面的 cf_hint，
-            # 不再让 404 直接放行、被上层误读成 "_t 失效"。
-            if looks_blocked(resp.status_code, resp.text, resp.headers):
+            # is_blocked 默认走 looks_blocked；站点可覆盖它补充 404 挑战页判据
+            # （例如 CF 用 404 + cf-ray 拦、正文又没有高特异性标记的情况）。
+            # 记进 blocked 后继续换下一个指纹，不再让挑战页直接放行被误读成 "_t 失效"。
+            if self.is_blocked(resp):
                 blocked.append((imp or "requests", resp.status_code))
                 continue
             return resp, session
-        if blocked:
+        # 只有真的收到过 HTTP 响应（至少一条 int 状态码）时才走 cf_hint；
+        # 清一色异常仍原样抛出，保持 verify_account 对"连不上 / 代理挂 / 超时"的分类。
+        if any(isinstance(code, int) for _, code in blocked):
             raise RuntimeError(self.cf_hint(blocked))
         if last_exc is not None:
-            # 全是网络层问题（连不上 / 代理挂 / 超时），原样抛出，
-            # 让上层按"连不上"处理，而不是谎报成 cookie 失效
             raise last_exc
         raise RuntimeError("请求失败")
 
-    def cf_hint(self, blocked: list[tuple[str, int]]) -> str:
-        codes = {code for _, code in blocked}
-        if codes == {429}:
+    def cf_hint(self, blocked: list[tuple[str, int | str]]) -> str:
+        if blocked and all(code == 429 for _, code in blocked):
             return (
                 "被限流了（每种浏览器指纹都是 HTTP 429）。这不是 cookie 失效，一般也不是封号：\n"
                 "1) 短时间内请求太密 —— 隔 1~2 分钟再跑一次；\n"
                 "2) 同一个出口 IP 上还有别的程序在打这个站（NAS 上的旧容器、别的签到脚本），换代理或停掉；\n"
                 "3) 登录 / 浏览频率过高同样会触发，把执行时间隔开一点。"
             )
-        tried = "、".join(f"{name}→HTTP {code}" for name, code in blocked)
+        tried = "、".join(
+            f"{name}→HTTP {code}" if isinstance(code, int) else f"{name}→{code}"
+            for name, code in blocked
+        )
         missing = (
             "\n当前环境没装 curl_cffi，只能用 requests 的默认 TLS 指纹，Cloudflare 一眼就能认出来；"
             "装上就多一层保障：pip install curl_cffi（Docker 镜像里已经预装）"
             if cffi_requests is None
+            else ""
+        )
+        version = curl_cffi_version()
+        version_note = (
+            f"\n当前 curl_cffi {'.'.join(str(p) for p in version)} 低于 0.17："
+            "firefox153/154/155 指纹不被支持，会抛 ImpersonateError（见上方 EXC 项），"
+            "请执行 pip install -U 'curl_cffi>=0.17.0' 升级。"
+            if version is not None and version < (0, 17)
             else ""
         )
         return (
@@ -392,7 +446,8 @@ class Site:
             "1) 出口 IP 最要紧：机房 IP、云服务器、部分机场节点会被直接挑战，换家宽或换节点；\n"
             "2) 别把浏览器里的 cf_clearance 抄进来：它和当时的 IP、UA 绑定，换台机器必然失效，"
             "本程序默认已经帮你丢掉了；\n"
-            f"3) 还是不行，就在设置页给这个站点单独配代理，走和浏览器同一个出口。{missing}"
+            f"3) 还是不行，就在设置页给这个站点单独配代理，走和浏览器同一个出口。"
+            f"{missing}{version_note}"
         )
 
 
