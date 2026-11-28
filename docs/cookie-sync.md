@@ -140,16 +140,22 @@ v20 要绕开，得往浏览器进程里注入代码（或者拿到 SYSTEM 权�
 
 cookie 会过期，手动同步迟早会忘。挂在 Windows 计划任务里，每天签到前 20 分钟跑一次：
 
-```cmd
-schtasks /Create /TN "checkin-cookie-sync" /SC DAILY /ST 08:50 ^
-  /TR "python C:\path\to\checkin-hub\tools\sync_cookies.py --nas http://192.168.1.10:8181"
+**PowerShell（推荐，注意转义）** —— `/TR` 的值用单引号整体包住，里面的双引号才是字面量、
+不会被拆开；上面那种 cmd 的 `^` 续行和 `\"` 写法在 PowerShell 里会报「意外的标记」：
+
+```powershell
+$tr = '"C:\path\to\pythonw.exe" "C:\path\to\checkin-hub\tools\sync_cookies.py" --nas http://<NAS地址>:8181 --sites linuxdo'
+schtasks /Create /SC DAILY /ST 08:50 /TN "checkin-cookie-sync" /TR $tr /F
+schtasks /Query /TN "checkin-cookie-sync"
 ```
 
-细节：
+CMD 用户仍可用 `^` 续行的老写法。另外：
 
+* 另开一个命令行直接执行带引号的 exe 时，开头要加调用运算符 `&`（PowerShell 里 `\"` 不转义）
 * 得勾上「只在用户登录时运行」，因为 DPAPI 解密要用你的用户配置，跑在 SYSTEM 下解不开
-* 时间点比 `RUN_AT` 早 20 分钟比较稳（默认签到是 09:10）
+* 时间点比 `RUN_AT` 早 20 分钟比较稳（默认签到是 09:10 → 同步 08:50）
 * 想临时跳过就 `schtasks /Run /TN "checkin-cookie-sync"` 手动触发一次
+* 面板端口是 8181（`docker-compose.yml` 的 `8181:8080`），不是脚本顶部注释残留的 8080
 
 一个现实的限制：**如果你一整天没开浏览器，cookie 也可能过期**。
 好在服务端通常会滑动续期 —— 只要隔天打开一次这些站，有效期就一直往后滚。

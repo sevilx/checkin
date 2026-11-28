@@ -396,7 +396,22 @@ python tools/sync_cookies.py --nas http://192.168.1.10:8181 --remember
 面板「设置」页的 **浏览器 Cookie 同步** 卡片会列出每个站点上次同步的时间，
 超过 48 小时标黄提醒你重新同步。手工在面板里填了新 cookie 的站点会自动停用同步。
 
-细节、怎么让它每天自动跑、以及为什么不建议为了一个站点上 Playwright，
+**每天自动同步（LinuxDo 这类每天轮换会话的站点强烈建议）**：第一次用有控制台的 python
+跑一次带 `--remember` 的命令让 Windows DPAPI 记住面板口令（此后不用再输），
+再挂一条 Windows 计划任务，设成签到前 20 分钟（默认签到 09:10 → 同步 08:50）。
+PowerShell 下建任务，`/TR` 的值要用**单引号整体包住**（里面的双引号原样保留）：
+
+```powershell
+$tr = '"C:\...\python\envs\default\Scripts\pythonw.exe" "C:\path\to\checkin-hub\tools\sync_cookies.py" --nas http://<NAS地址>:8181 --sites linuxdo'
+schtasks /Create /SC DAILY /ST 08:50 /TN "LinuxDoCookieSync" /TR $tr /F
+schtasks /Query /TN "LinuxDoCookieSync"
+```
+
+> 注意两点：① 直接执行带引号的 exe 路径要用调用运算符 `&` 开头（PowerShell 里 `\"` 不转义）；
+> ② 计划任务要勾「只在用户登录时运行」——DPAPI 口令只有你的用户配置能解开。
+> 面板端口是 **8181**（脚本顶部注释里的 8080 是旧值）。
+
+细节、以及为什么不建议为了一个站点上 Playwright，
 见 [docs/cookie-sync.md](docs/cookie-sync.md)。
 
 ### 手工填写：环境变量 / config.json
@@ -730,7 +745,7 @@ docker compose config -q && echo OK
 
 先在提示里分清是哪一种，这两种的处理方式完全相反：
 
-**一、`Just a moment...` / 提示里说"请求没到站点"** —— 这是 Cloudflare 的挑战页，跟 cookie 没关系，请求在边缘节点就被挡了：
+**一、`Just a moment...` / 提示里说"请求没到站点"** —— 这是 Cloudflare 的挑战页，请求在边缘节点就被挡了。**但注意**：如果换了几种指纹都失败、最后提示"没到站点"，也往往是 cookie 会话过期被站点拒绝后被误判成挑战 —— LinuxDo 尤其常见，见下面 LinuxDo 那条。下面三条仍然成立：
 
 1. **根本原因是请求指纹**。`requests` 的 TLS 握手（JA3）和 HTTP/2 指纹太"像脚本"，Cloudflare 一眼就能认出来。本项目用 `curl_cffi` 复刻 Safari / Chrome 的指纹，被拦时还会自动换几种指纹重试。Docker 镜像和 Actions 都已预装；自己搭环境就 `pip install curl_cffi`（不装也能跑，只是这些站点更容易 403）
 2. **出口 IP 决定一切**。机房 IP、云服务器、部分机场节点会被直接挑战；家宽 / NAS 直连成功率明显更高。可以给单个站点配代理，走和浏览器同一个出口
@@ -739,10 +754,13 @@ docker compose config -q && echo OK
 **二、站点回话了但拒绝登录（401 / 403 / 404，提示说"cookie 不被承认"）** —— 三类里只有一类是 cookie 的问题：
 
 - **NodeSeek**：cookie 里必须有 `session`。它和 `pjwt` 都是 HttpOnly，`document.cookie` 拿不到，要从 F12 → 网络 → 请求标头 → `Cookie` 整行复制
-- **LinuxDo 报 404、且 cookie 里确实有 `_t`**：多半**不是** `_t` 失效 —— Discourse 对未登录的接口本来就回 404，而挂在 CF 后的 linux.do 在**出口 IP 被挑战**时也回 404/403。按这个顺序排查：
-  1. **先看出口**：NAS 若走代理 / 机场节点，给这个站点单独配一条**和浏览器同一个出口（同一节点、同一公网 IP）**的代理。机场节点一切换出口 IP，登录态立刻对不上，这比 `_t` 过期常见得多；
-  2. **再试保留 CF 会话**：确认容器和浏览器同出口后，在设置里把 `keep_cf=1` 打开、并把当时那个浏览器的 UA 填进 `ua`（LinuxDo 已暴露这两个字段）。出口不一致时**不要开**，会更像伪造请求；
-  3. **最后才是 `_t` 本身**：改密码 / 手动退出所有设备 / 换设备都会让它失效，重新登录一次再整行复制。
+- **LinuxDo 报 404 / "换了几种指纹都不行"，而 cookie 里确实有 `_t`**：**先查 cookie 新鲜度，别急着换 IP / UA / 指纹。** Discourse 的会话 cookie（`linux_do_credit_session_id`、`_t`）会**每天轮换**：浏览器每次访问自动续期，所以你"不用重登、不用过 CF"毫无感觉；但脚本用的是粘贴时的**静态快照**，隔天就成了旧会话 → 站点按未登录回 404，被程序判成"全指纹被拦"。按这个顺序排查：
+  1. **第一优先：重新同步一次当天的 cookie。** 在浏览器里正常打开一次 LinuxDo，然后跑一次 [`sync_cookies.py`](#不想手动复制浏览器自动同步)（`--sites linuxdo`），或在面板重贴整行 Cookie。**判断依据**：同一出口、同一 UA、同一指纹，重贴最新 cookie 立刻成功 —— 这就是 cookie 新鲜度问题，与 CF / IP / 指纹无关。治本是配每天自动同步（见[浏览器自动同步](#不想手动复制浏览器自动同步)和 [docs/cookie-sync.md](docs/cookie-sync.md)），让 NAS 永远用昨天的会话，不用手动重贴。
+  2. **再看出口**：若重新同步后仍失败，NAS 走代理 / 机场节点时给这个站点单独配一条**和浏览器同一个出口（同一节点、同一公网 IP）**的代理。机场节点一切换出口 IP，`cf_clearance` 就会对不上。
+  3. **最后才试 `keep_cf`**：确认容器和浏览器同出口后，可把 `keep_cf=1` 打开、并把当时那个浏览器的 UA 填进 `ua`。出口不一致时**不要开**，会更像伪造请求；而且**会话 cookie 已经过期时，`cf_clearance` 保留得再对也过不了登录校验** —— 它救不了新鲜度问题。
+  4. **`_t` 真的失效**：改密码 / 手动退出所有设备 / 换设备才会让它失效，重新登录一次再整行复制。
+
+  > 别用 `tools/diagnose_proxy.py` 的**匿名探测**段（不带 `--check-login`）判断成败 —— 那段故意不带任何 cookie、用默认指纹裸探，被 CF 挑战是必然的，任何 IP 都会这样，它只是看接口 CF 特征的基线。带登录态探测也要和真实签到请求头一致才有参考价值；最终**以实际签到结果为准**。
 - **LinuxDo cookie 里根本没有 `_t`**：这是 HttpOnly，控制台 `document.cookie` 拿不到，必须从 F12 → 网络 → 点任意请求 → 请求标头 → `Cookie` 整行复制。**这是"电脑上明明登录着、程序却说失效"最常见的原因**
 - 改过密码、在别处点过"退出所有设备"，`_t` 都会立即失效，重新登录一次就好
 
@@ -767,7 +785,10 @@ docker compose config -q && echo OK
 恩山那个签到是 `erling_qd`（二灵签到）插件，接口返回 JSON（`success` / `message` / `continuous_days`），所以日志里能直接看到连续签到天数。
 
 **为什么我在电脑上能登录，NAS 上就不行？**
-cookie 本身是对的，但出口 IP 和 TLS 指纹跟浏览器不一样。Cloudflare 校验的是"这三样是不是同一个客户端"，所以换机器 = 换客户端。要么让 NAS 走和浏览器同一个代理出口，要么指望指纹+IP 别太脏。
+两种原因，先分清是哪种：
+
+1. **一直不行** —— 多半是出口 IP 和 TLS 指纹跟浏览器不一样。Cloudflare 校验"这三样是不是同一个客户端"，换机器 = 换客户端；要么让 NAS 走和浏览器同一个代理出口，要么指望指纹 + IP 别太脏。
+2. **昨天行、今天不行，浏览器却无感** —— 这是 **cookie 新鲜度**，不是 IP/指纹。Discourse（LinuxDo）会话每天轮换，浏览器自动续期，脚本却还在用昨天的快照。重新同步当天 cookie 即可，治本是每天自动同步（见[浏览器自动同步](#不想手动复制浏览器自动同步)）。别在这条路上反复换节点、改 UA、重登 —— 那是白费功夫。
 
 **V2EX 显示"今日已领取"是失败吗？**
 不是，那是成功。V2EX 的签到就是 `/mission/daily` 页上的「领取铜币」，当天领过之后页面只剩一句「每日登录奖励已领取」。旧版本会把这种状态当成失败，现在算成功。
