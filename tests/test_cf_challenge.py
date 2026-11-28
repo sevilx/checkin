@@ -202,6 +202,72 @@ class TestExceptionVisibility(unittest.TestCase):
             core.cffi_requests = saved
 
 
+class TestCfHintWording(unittest.TestCase):
+    """CF 提示文案不得把用户引离 cookie 新鲜度（只改文案，不改判据）。"""
+
+    def test_non_429_hint_does_not_rule_out_cookie(self):
+        hint = core.Site({"cookie": "a=b"}).cf_hint(
+            [("firefox155", 404), ("firefox154", 404)]
+        )
+        lowered = hint.lower()
+        # 两句武断断言必须消失
+        self.assertNotIn("这不是 cookie 的问题", lowered)
+        self.assertNotIn("请求根本没到站点服务器", lowered)
+        # 必须把低成本的 cookie 新鲜度 / 重新同步列进排查项
+        self.assertIn("cookie 新鲜度", lowered)
+        self.assertIn("重新同步", lowered)
+        # 原有几条可能仍在，且 tried 明细照常回显
+        self.assertIn("出口 ip", lowered)
+        self.assertIn("cf_clearance", lowered)
+        self.assertIn("配代理", hint)
+        self.assertIn("firefox155→HTTP 404", hint)
+        self.assertIn("firefox154→HTTP 404", hint)
+
+    def test_429_hint_wording_unchanged(self):
+        expected = (
+            "被限流了（每种浏览器指纹都是 HTTP 429）。这不是 cookie 失效，一般也不是封号：\n"
+            "1) 短时间内请求太密 —— 隔 1~2 分钟再跑一次；\n"
+            "2) 同一个出口 IP 上还有别的程序在打这个站（NAS 上的旧容器、别的签到脚本），换代理或停掉；\n"
+            "3) 登录 / 浏览频率过高同样会触发，把执行时间隔开一点。"
+        )
+        hint = core.Site({"cookie": "a=b"}).cf_hint(
+            [("firefox155", 429), ("firefox154", 429)]
+        )
+        self.assertEqual(hint, expected)
+
+    def test_linuxdo_cf_block_message_mentions_cookie_freshness(self):
+        from checkin.sites import linuxdo
+
+        for kept_cf in (False, True):
+            with self.subTest(kept_cf=kept_cf):
+                msg = linuxdo._cf_block_message(404, kept_cf=kept_cf).lower()
+                self.assertNotIn("这不是登录令牌失效", msg)
+                self.assertNotIn("别反复重登 cookie", msg)
+                self.assertIn("cookie 新鲜度", msg)
+                self.assertIn("重新同步", msg)
+
+    def test_linuxdo_cf_hint_keeps_keep_cf_note(self):
+        hint = make_site().cf_hint([("firefox155", 404), ("firefox154", 404)])
+        self.assertIn("[keep_cf=1 注意]", hint)
+        self.assertIn("cf_clearance", hint)
+        self.assertNotIn("这不是 cookie 的问题", hint.lower())
+
+    def test_linuxdo_guard_message_mentions_cookie_freshness(self):
+        site = make_site()
+        # 站点正常拒绝（非 CF 挑战）：Discourse 未登录 JSON
+        resp = StubResponse(
+            404,
+            '{"current_user": null, "error_type": "not_logged_in"}',
+            {"cf-ray": "x", "server": "cloudflare"},
+        )
+        with self.assertRaises(RuntimeError) as ctx:
+            site._guard(resp, kept_cf=True)
+        msg = str(ctx.exception).lower()
+        self.assertIn("cookie 新鲜度", msg)
+        self.assertIn("重新同步", msg)
+        self.assertNotIn("这不是登录令牌失效", msg)
+
+
 class TestDiagnoseScript(unittest.TestCase):
     """诊断脚本的参数与脱敏边界（不联网）。"""
 

@@ -13,10 +13,12 @@ Discourse 服务端对单批 timings 只做 `MAX_READ_TIME_PER_BATCH = 60_000` �
 不校验"人不可能读这么快"，所以伪造时长在技术上完全可行 —— 本模块刻意不提供这个能力，
 只按真实耗时上报，宁可涨得慢，也不把签到工具做成刷等级工具。
 
-403 有四种完全不同的原因，必须分开说，否则用户会一直换 cookie：
+403/404 有几种完全不同的原因，必须分开说，否则用户会一直盲目换 cookie 或换 IP：
 * 站点回的是 Cloudflare 挑战页 → 出口 IP / TLS 指纹的问题（已用 curl_cffi 多指纹兜底）；
 * Cookie 里没有 `_t` → Discourse 的登录令牌是 HttpOnly，控制台 document.cookie 拿不到，
   只能从「网络 → 请求标头 → Cookie」整行复制；
+* Cookie 快照过期 → 会话 id 每天轮换，浏览器会自动续期，脚本用的却是粘贴时的旧快照；
+  先在浏览器重新拿一次最新会话 cookie 并重新同步，这是成本最低的排查项；
 * Cookie 里有 `_t` 但站点不认 → 那是别的环境签发的，重新登录一次；
 * 出口 IP 被 linux.do 的风控盯上 → 换节点。
 """
@@ -95,29 +97,34 @@ def _cf_blocked(resp) -> bool:
 
 
 def _cf_block_message(status: int, kept_cf: bool = False) -> str:
-    """与挑战性质匹配的可操作提示（复用 core.cf_hint 的思路，但不说 _t 失效）。
+    """与挑战性质匹配的可操作提示（复用 core.cf_hint 的思路）。
 
-    kept_cf 决定第 2 条怎么说：keep_cf=1 时 cf_clearance 其实被保留了，
+    既不武断说 "_t 失效" 让用户盲目重登，也不武断排除 cookie 新鲜度：
+    会话 cookie 过期和 CF 挑战都可能表现为同一个状态码，先给成本最低的同步项。
+    kept_cf 决定 CF 会话那条怎么说：keep_cf=1 时 cf_clearance 其实被保留了，
     再写"本程序默认已经帮你丢掉"就是自相矛盾，必须改成核对 UA / 出口。
     """
     if kept_cf:
-        second = (
-            "2) 你开了 keep_cf=1，cf_clearance 被保留了：请核对 ua 是否填了当时那个浏览器的 UA"
+        cf_item = (
+            "3) 你开了 keep_cf=1，cf_clearance 被保留了：请核对 ua 是否填了当时那个浏览器的 UA"
             f"（RunningCheese Firefox 160 可参考 {LINUXDO_UA_EXAMPLE}），"
             "且容器出口是否和浏览器一致；两项对不上会被 CF 挑战；\n"
         )
     else:
-        second = (
-            "2) 不要把浏览器里的 cf_clearance 抄进来：它和当时的出口 IP、UA 绑定，换节点必然失效，"
+        cf_item = (
+            "3) 不要把浏览器里的 cf_clearance 抄进来：它和当时的出口 IP、UA 绑定，换节点必然失效，"
             "本程序默认已经帮你丢掉；\n"
         )
     return (
         f"登录校验被 Cloudflare / WAF 挑战（HTTP {status}，CF 可能用 404 当拦截页）。"
-        "这不是登录令牌失效，别反复重登 cookie：\n"
-        "1) 出口 IP 最要紧：给这个站点配一条和浏览器同一个出口（同一节点、同一公网 IP）的代理，"
+        "单看这个状态码不能断定是哪一环出了问题，按排查成本从低到高试：\n"
+        "1) Cookie 新鲜度：论坛的会话 cookie 常每天轮换，浏览器会自动续期，"
+        "脚本用的却是粘贴时的旧快照；先在浏览器重新拿一次最新会话 cookie 并重新同步过来，"
+        "这一步成本最低，值得先做；\n"
+        "2) 出口 IP：给这个站点配一条和浏览器同一个出口（同一节点、同一公网 IP）的代理，"
         "节点不干净就换一个；\n"
-        + second
-        + "3) 容器里代理可能没生效，可用 tools/diagnose_proxy.py 先看连通性和出口 IP。"
+        + cf_item
+        + "4) 容器里代理可能没生效，可用 tools/diagnose_proxy.py 先看连通性和出口 IP。"
     )
 
 
@@ -241,6 +248,8 @@ class LinuxDo(Site):
 
         不改 core.cf_hint() 的通用行为，只在 LinuxDo 且确实保留了 cf_clearance 时
         追加一条说明，避免 browser_request 层被拦截时提示自相矛盾。
+        core 里新增的 cookie 新鲜度排查项对 keep_cf=1 同样适用，不能因为
+        保留了 cf_clearance 就把用户引离"重新同步最新会话 cookie"这一步。
         """
         hint = super().cf_hint(blocked)
         keep = _flag(self.account.get("keep_cf"))
@@ -249,8 +258,10 @@ class LinuxDo(Site):
         return (
             hint
             + "\n[keep_cf=1 注意] 本次实际保留了 cf_clearance 并使用了 ua 字段里的 UA；"
-            "上面 core 通用提示里“默认已丢掉 cf_clearance”那句对你不适用。"
+            "上面 core 通用提示里关于“默认丢弃 cf_clearance”的说法对你不适用。"
             "请核对 ua 与换 cf_clearance 的浏览器是否一致、容器出口 IP 是否和浏览器一致。"
+            "另外，上面第一条 cookie 新鲜度同样适用：会话 cookie 过期时，"
+            "cf_clearance 保留得再对也过不了登录校验，记得先重新同步一次最新 Cookie。"
         )
 
     # ------------------------------------------------------------------ #
@@ -552,8 +563,9 @@ class LinuxDo(Site):
 
         403/404 不能一律说成 "_t 失效"：Discourse 对未登录的 /session/current.json
         本来就回 404，而挂在 Cloudflare 后的 linux.do 在出口 IP 被挑战时，接口也会
-        回 403/404。真正 "_t 失效" 只是其中一种可能，得先看是不是出口/凭证的问题，
-        否则用户会反复重登 cookie，问题却一直不解决。
+        回 403/404。会话 cookie 每天轮换导致的"快照过期"更常见，且重新同步成本最低；
+        真正 "_t 失效" 只是其中一种可能，不能一上来就让用户反复重登，
+        也不能把 cookie 新鲜度排除在排查项之外。
 
         kept_cf 用来让 CF 会话那条提示和实际行为一致：保留时不说"默认已丢掉"。
         """
@@ -572,27 +584,30 @@ class LinuxDo(Site):
                     "控制台里输 document.cookie 是拿不到的。"
                     "请用 F12 → 网络 → 任意请求 → 请求标头 → Cookie 整行复制。"
                 )
-            # 有 _t 却被拒：优先怀疑出口 IP / CF 会话，而不是又让用户去重登。
-            # 只有当确实没有 cf_clearance 可用、且出口这一层已排除时，才指向 _t 本身。
+            # 有 _t 却被拒：会话快照过期、出口 IP、CF 会话都是可能原因，
+            # 先给成本最低的"重新同步最新 Cookie"，最后由用户逐项排除后才指向 _t 本身。
             if kept_cf:
                 cf_session_hint = (
-                    "2) CF 会话：你开了 keep_cf=1，cf_clearance 被保留了、ua 也已填；"
+                    "3) CF 会话：你开了 keep_cf=1，cf_clearance 被保留了、ua 也已填；"
                     "请核对 ua 是否为当时那个浏览器的 UA、容器出口 IP 是否和浏览器一致"
                     "（cf_clearance 与这两项绑定）；\n"
                 )
             else:
                 cf_session_hint = (
-                    "2) CF 会话：浏览器里 cf_clearance 是在你的出口换来的，默认已被本程序丢掉。"
+                    "3) CF 会话：浏览器里 cf_clearance 是在你的出口换来的，默认已被本程序丢掉。"
                     "若确认容器和浏览器同出口，可在设置里把 keep_cf=1 打开，并把当时那个浏览器的 UA 填进 ua"
                     "（两者必须配对；出口不一致时千万别开，会更像伪造）；\n"
                 )
             raise RuntimeError(
-                f"登录校验被拒（HTTP {resp.status_code}）。有 _t 但接口不认，按可能性从高到低排查：\n"
-                "1) 出口 IP：如果你在 NAS 上走了代理 / 机场节点，Cloudflare 会认出口——"
+                f"登录校验被拒（HTTP {resp.status_code}）。有 _t 但接口不认，按排查成本从低到高试：\n"
+                "1) Cookie 新鲜度：论坛会话 cookie 常每天轮换，浏览器会自动续期，"
+                "脚本用的却是同步时的旧快照；先在浏览器重新拿一次最新会话 cookie 并重新同步过来，"
+                "这一步成本最低，往往就是症结；\n"
+                "2) 出口 IP：如果你在 NAS 上走了代理 / 机场节点，Cloudflare 会认出口——"
                 "先给这个站点配一条和浏览器同一个出口（同一节点、同一公网 IP）的代理再试；\n"
                 + cf_session_hint
-                + "3) 排除以上两步后仍不行，才是 _t 本身失效：改密码 / 手动退出 / 换设备都会让它失效，"
-                "重新登录一次再复制完整 Cookie。"
+                + "4) 以上都排除后仍不行，才考虑 _t 本身失效（改密码 / 手动退出 / 换设备都会让它失效）："
+                "那时再重新登录一次并复制完整 Cookie。"
             )
         raise RuntimeError(f"登录校验失败 HTTP {resp.status_code}")
 
