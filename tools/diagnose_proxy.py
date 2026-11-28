@@ -19,14 +19,21 @@
     # 带登录态只读探测（一条命令区分出口 / UA / cookie 的问题）：
     docker exec -it checkin python3 tools/diagnose_proxy.py --check-login
 
-    # 指定指纹 / UA（两者都不是私密值），并打印 curl_cffi 版本与 2x2 对比：
+    # 指定指纹 / UA（两者都不是私密值），探测用与签到一致的完整请求头：
     docker exec -it checkin python3 tools/diagnose_proxy.py --check-login \
         --impersonate firefox155 --ua '<浏览器 UA>'
 
+    # 需要对比指纹 × cf_clearance 时再显式加 --matrix（会连发多个请求，可能触发 CF 风控）：
+    docker exec -it checkin python3 tools/diagnose_proxy.py --check-login \
+        --impersonate firefox155 --ua '<浏览器 UA>' --matrix
+
 脚本只读：不写文件、不改配置。默认不携带任何登录态（不构造 Cookie 头）；
-仅显式传 --check-login 时，才用容器内同步层的 LinuxDo Cookie 发一组只读 GET
-（单次探测 + 指纹 × cf_clearance 的 2x2 对比），且只打印状态码 / 是否 200 /
-是否含 current_user / CF 特征，绝不打印 Cookie 值、请求体或站点正文内容。
+仅显式传 --check-login 时，才用容器内同步层的 LinuxDo Cookie 发一次只读 GET，
+且**复用与真正签到完全相同的请求头**（XHR_HEADERS + Accept/X-Requested-With/
+Referer/Origin + 按指纹裁剪）——之前只发 Cookie+UA 的裸请求必被 CF 挑战，其 403
+不代表签到结果。指纹 × cf_clearance 的 2x2 对比默认关闭，需 --matrix 显式开启，
+且请求间加 1 秒间隔。全程只打印状态码 / 是否 200 / 是否含 current_user / CF 特征，
+绝不打印 Cookie 值、请求体或站点正文内容。
 """
 
 from __future__ import annotations
@@ -36,6 +43,7 @@ import os
 import re
 import socket
 import sys
+import time
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -125,6 +133,11 @@ def _parse_args():
         "--ua",
         default="",
         help="单次探测注入的 User-Agent（非私密值；与站点 ua 字段一致才复现真实请求）",
+    )
+    parser.add_argument(
+        "--matrix",
+        action="store_true",
+        help="额外跑指纹×cf_clearance 的 2x2 对比；会连发多个请求，可能触发 CF 风控，默认关闭",
     )
     return parser.parse_args()
 
@@ -222,6 +235,43 @@ def _new_session(proxy_map: dict[str, str] | None, mode: str, impersonate: str =
     if proxy_map and mode == "post":
         sess.proxies = dict(proxy_map)
     return sess
+
+
+def _signin_headers(impersonate: str, ua: str, kept_cf: bool) -> dict[str, str]:
+    """复刻真正签到发出的业务头集合，避免诊断发「裸请求」被 CF 误判。
+
+    真正路径：linuxdo._headers(kept_cf)（XHR_HEADERS + Accept + X-Requested-With
+    + Referer + Origin，kept_cf 时注入面板 ua），再经 core.session() 里的
+    _fingerprint_headers() 按指纹裁掉 sec-ch-* / 非 Chromium 的 sec-fetch-*。
+    之前诊断只发 Cookie + UA 两个头，是一眼可辨的裸请求，被 CF 挑战的 403
+    根本不能代表签到结果。这里直接复用 core 的常量与裁剪函数，防止两处漂移。
+    Cookie 由调用方另加（真正路径也是 session() 里单独注入的）。
+    """
+    try:
+        from checkin.core import XHR_HEADERS, _fingerprint_headers
+        from checkin.sites.linuxdo import BASE as LINUXDO_BASE
+
+        headers: dict[str, str] = dict(XHR_HEADERS)
+    except Exception:  # noqa: BLE001 - core 不可用时的最小兜底
+        headers = {}
+        LINUXDO_BASE = "https://linux.do"
+
+        def _fingerprint_headers(h, browser):  # type: ignore[no-redef]
+            return dict(h or {})
+
+    headers.update(
+        {
+            "Accept": "application/json, text/javascript, */*; q=0.01",
+            "X-Requested-With": "XMLHttpRequest",
+            "Referer": f"{LINUXDO_BASE}/",
+            "Origin": LINUXDO_BASE,
+        }
+    )
+    # 与 core.cf_headers 一致：仅保留 cf_clearance(kept_cf) 且填了 ua 时才注入 UA
+    if ua and kept_cf:
+        headers["User-Agent"] = ua
+    # 与 core.session() 一致：指纹模式下裁掉浏览器特征头，交给 curl_cffi 指纹默认头
+    return _fingerprint_headers(headers, impersonate)
 
 
 def _check_exit_ip(proxy_map: dict[str, str] | None, mode: str) -> None:
@@ -323,9 +373,11 @@ def _check_login_state(
     if cffi_requests is None:
         print("  带登录态探测: SKIP（curl_cffi 未安装，无法用与站点一致的指纹）")
         return
-    headers = {"Cookie": cookie}
-    if ua:
-        headers["User-Agent"] = ua
+    # 用与真正签到完全相同的业务头（XHR_HEADERS + Accept/X-Requested-With/
+    # Referer/Origin + 按指纹裁剪），不再是裸 Cookie+UA；这样 403 才有诊断价值。
+    kept_cf = bool(has_cf_clearance)
+    headers = _signin_headers(impersonate, ua, kept_cf)
+    headers["Cookie"] = cookie
     try:
         session = _new_session(
             proxy_map, mode="ctor" if proxy_map else "direct", impersonate=impersonate
@@ -334,7 +386,10 @@ def _check_login_state(
     except Exception as exc:  # noqa: BLE001
         print(f"  带登录态探测: FAIL (impersonate={impersonate}, {_safe_error(exc)})")
         return
-    print(f"  带登录态探测参数: impersonate={impersonate} ua_injected={_yes(bool(ua))}")
+    print(
+        f"  带登录态探测参数: impersonate={impersonate} ua_injected={_yes(bool(ua) and kept_cf)} "
+        f"headers=signin-full"
+    )
 
     resp_headers = resp.headers or {}
     body = (resp.text or "")[:4000].lower()
@@ -360,8 +415,9 @@ def _check_login_state(
     else:
         print("  结论: 未见明确特征；对比匿名探测结果，若两者不同说明 Cookie 生效但被站点拒绝。")
     print(
-        "  提示: 未传 --ua 时本探测的 UA 来自 curl_cffi 指纹，不是面板的 ua；"
-        "要完全复现站点请求请同时传 --impersonate 与 --ua（两者都不是私密值）。"
+        "  提示: 本探测已复用签到的完整请求头；要完全复现请同时传 --impersonate 与 --ua"
+        "（两者都不是私密值）。若这里 HTTP 200 current_user=YES 而签到仍失败，"
+        "差异多半在 cookie 新鲜度或请求时机，而非 UA / 指纹 / 请求头。"
     )
 
 
@@ -398,10 +454,11 @@ def _check_login_matrix(proxy_map: dict[str, str] | None, ua: str = "") -> None:
             ("保留cf", kept_cookie, True),
             ("丢弃cf", dropped_cookie, False),
         ):
-            headers = {"Cookie": value}
-            # 与站点行为一致：只有保留 cf_clearance 时才注入面板 UA
-            if ua and keep:
-                headers["User-Agent"] = ua
+            # 用与真正签到一致的完整业务头；只有保留 cf_clearance 的那一列注入面板 UA
+            headers = _signin_headers(imp, ua, keep)
+            headers["Cookie"] = value
+            # 多请求密集打出会触发 CF 风控，间隔 1 秒再发下一个（仅影响诊断，不影响签到）
+            time.sleep(1.0)
             try:
                 session = _new_session(
                     proxy_map, mode="ctor" if proxy_map else "direct", impersonate=imp
@@ -432,6 +489,7 @@ def main() -> int:
     args = _parse_args()
     proxy = _proxy_from_args(args)
     check_login = bool(getattr(args, "check_login", False))
+    matrix = bool(getattr(args, "matrix", False))
     impersonate = str(getattr(args, "impersonate", "") or IMPERSONATE)
     ua = str(getattr(args, "ua", "") or "")
     _check_env()
@@ -471,10 +529,14 @@ def main() -> int:
     # 独立于 curl_cffi 是否可用：缺依赖时 _check_login_state 内部也会打印 SKIP
     if check_login:
         print("== LinuxDo 登录态只读探测（--check-login）==")
+        print("  说明: 本次探测已改用与真正签到完全相同的请求头（signin-full）。")
         _check_login_state(proxy_map, impersonate=impersonate, ua=ua)
-        if cffi_requests is not None:
-            print("== LinuxDo 2x2 只读对比（指纹 × cf_clearance）==")
+        # 2x2 会连发多个请求，可能自己触发 CF 风控而让结果失真；改为显式 opt-in
+        if matrix and cffi_requests is not None:
+            print("== LinuxDo 2x2 只读对比（--matrix，指纹 × cf_clearance）==")
             _check_login_matrix(proxy_map, ua=ua)
+        elif matrix:
+            print("== LinuxDo 2x2: SKIP（curl_cffi 未安装）==")
     return 0
 
 

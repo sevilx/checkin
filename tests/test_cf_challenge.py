@@ -295,5 +295,60 @@ class TestDiagnoseScript(unittest.TestCase):
         )
 
 
+class TestSigninFullHeaders(unittest.TestCase):
+    """诊断必须复用真正签到的完整请求头，不能再发裸 Cookie+UA。"""
+
+    def test_headers_match_real_signin_business_headers(self):
+        """完整头必须含签到那套业务头，且不含已裁剪的客户端提示。"""
+        from tools import diagnose_proxy
+
+        headers = diagnose_proxy._signin_headers("firefox155", FF_UA, kept_cf=True)
+        # 签收 _headers() 注入的业务头一个都不能少
+        self.assertEqual(headers.get("X-Requested-With"), "XMLHttpRequest")
+        self.assertEqual(headers.get("Referer"), "https://linux.do/")
+        self.assertEqual(headers.get("Origin"), "https://linux.do")
+        self.assertEqual(
+            headers.get("Accept"), "application/json, text/javascript, */*; q=0.01"
+        )
+        self.assertEqual(headers.get("Accept-Language"), "zh-CN,zh;q=0.9,en;q=0.8")
+        # 指纹模式下这些特征头交给 curl_cffi 自己发
+        self.assertFalse(any(k.lower().startswith("sec-ch-") for k in headers))
+        self.assertFalse(any(k.lower().startswith("sec-fetch-") for k in headers))
+
+    def test_ua_injected_only_when_kept_cf(self):
+        """UA 注入规则与 core.cf_headers 一致：仅 kept_cf 且 ua 非空。"""
+        from tools import diagnose_proxy
+
+        headers_kept = diagnose_proxy._signin_headers("firefox155", FF_UA, kept_cf=True)
+        self.assertEqual(headers_kept.get("User-Agent"), FF_UA)
+        headers_dropped = diagnose_proxy._signin_headers("firefox155", FF_UA, kept_cf=False)
+        self.assertNotIn("User-Agent", headers_dropped)
+        headers_no_ua = diagnose_proxy._signin_headers("firefox155", "", kept_cf=True)
+        self.assertNotIn("User-Agent", headers_no_ua)
+
+    def test_full_headers_equal_real_site_headers_after_fingerprint(self):
+        """诊断头应与真正站点 _headers() 经指纹裁剪后的结果逐项相等。"""
+        from tools import diagnose_proxy
+
+        site = make_site()  # keep_cf=1, ua=FF_UA
+        real = site._headers(kept_cf=True)  # cf_headers 已注入 ua
+        real = core._fingerprint_headers(real, "firefox155")
+        diag = diagnose_proxy._signin_headers("firefox155", FF_UA, kept_cf=True)
+        self.assertEqual(diag, real)
+
+    def test_matrix_is_opt_in(self):
+        """--matrix 默认关闭；显式给出才开启。"""
+        from tools import diagnose_proxy
+
+        argv = sys.argv
+        try:
+            sys.argv = ["diagnose_proxy.py", "--check-login"]
+            self.assertFalse(diagnose_proxy._parse_args().matrix)
+            sys.argv = ["diagnose_proxy.py", "--check-login", "--matrix"]
+            self.assertTrue(diagnose_proxy._parse_args().matrix)
+        finally:
+            sys.argv = argv
+
+
 if __name__ == "__main__":
     unittest.main()
